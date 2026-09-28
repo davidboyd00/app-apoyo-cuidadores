@@ -20,6 +20,10 @@ do $$ begin
   create type entry_source as enum ('text', 'voice');
 exception when duplicate_object then null; end $$;
 
+do $$ begin
+  create type dose_status as enum ('tomada', 'omitida', 'postpuesta');
+exception when duplicate_object then null; end $$;
+
 -- ============================================================================
 -- Tablas
 -- ============================================================================
@@ -71,6 +75,32 @@ create table if not exists medications (
 -- bases que ya corrieron una versión anterior del schema).
 alter table medications
   add column if not exists horarios time[] not null default '{}';
+
+-- Registro de dosis (adherencia). Append-only por diseño: sirve como
+-- evidencia clínica y alimenta el KPI de relevo familiar vía author_id.
+-- `scheduled_for` es la hora en que correspondía; `taken_at` cuándo se tomó
+-- efectivamente (null si el status es 'omitida').
+create table if not exists medication_doses (
+  id             uuid primary key default gen_random_uuid(),
+  patient_id     uuid not null references patients(id) on delete cascade,
+  medication_id  uuid not null references medications(id) on delete cascade,
+  author_id      uuid not null default auth.uid() references auth.users(id) on delete restrict,
+  scheduled_for  timestamptz not null,
+  taken_at       timestamptz,
+  status         dose_status not null,
+  notas          text,
+  created_at     timestamptz not null default now(),
+  -- Coherencia: si se tomó, hay taken_at; si se omitió, no lo hay.
+  check (
+    (status = 'tomada'      and taken_at is not null) or
+    (status = 'omitida'     and taken_at is null)     or
+    (status = 'postpuesta')
+  )
+);
+create index if not exists medication_doses_patient_sched_idx
+  on medication_doses (patient_id, scheduled_for desc);
+create index if not exists medication_doses_med_sched_idx
+  on medication_doses (medication_id, scheduled_for);
 
 create table if not exists summaries (
   id          uuid primary key default gen_random_uuid(),
@@ -145,6 +175,7 @@ alter table patients            enable row level security;
 alter table care_members        enable row level security;
 alter table log_entries         enable row level security;
 alter table medications         enable row level security;
+alter table medication_doses    enable row level security;
 alter table summaries           enable row level security;
 alter table assistant_messages  enable row level security;
 alter table centers             enable row level security;
@@ -216,6 +247,20 @@ drop policy if exists meds_write on medications;
 create policy meds_write on medications
   for all using (has_role(patient_id, 'admin') or has_role(patient_id, 'caregiver'))
   with check (has_role(patient_id, 'admin') or has_role(patient_id, 'caregiver'));
+
+-- medication_doses: leer si soy miembro; escribir admin/caregiver con
+-- author_id = auth.uid() para preservar KPI de relevo familiar. Append-only
+-- a propósito (sin policies UPDATE/DELETE): la adherencia es evidencia clínica.
+drop policy if exists doses_select on medication_doses;
+create policy doses_select on medication_doses
+  for select using (is_member(patient_id));
+
+drop policy if exists doses_insert on medication_doses;
+create policy doses_insert on medication_doses
+  for insert with check (
+    (has_role(patient_id, 'admin') or has_role(patient_id, 'caregiver'))
+    and author_id = auth.uid()
+  );
 
 -- summaries: leer si soy miembro; escribir admin/caregiver.
 drop policy if exists summaries_select on summaries;
@@ -465,8 +510,15 @@ comment on column log_entries.occurred_at   is 'Momento del hecho registrado. Di
 comment on column log_entries.source        is 'text|voice. La transcripción se hace en el cliente; el backend nunca recibe audio (ARCHITECTURE.md §5).';
 
 comment on table  medications               is 'Régimen medicamentoso del paciente. Categoría: dato sensible (salud).';
-comment on column medications.horarios      is 'Horas del día en que corresponde administrar. Base para recordatorios (diseño pendiente).';
+comment on column medications.horarios      is 'Horas del día en que corresponde administrar. Base para /medications/upcoming (cliente agenda recordatorios locales).';
 comment on column medications.activo        is 'Soft-delete: preserva historial de adherencia (útil clínicamente).';
+
+comment on table  medication_doses          is 'Registro de dosis administradas/omitidas. Categoría: dato sensible (salud + adherencia farmacológica). Append-only.';
+comment on column medication_doses.author_id     is 'Quién marcó la dosis. Alimenta KPI de relevo familiar (>60%) igual que log_entries.author_id.';
+comment on column medication_doses.scheduled_for is 'Hora en que correspondía tomar según `medications.horarios`. Puede diferir de taken_at.';
+comment on column medication_doses.taken_at      is 'Hora real de administración. NULL si status=omitida. Distinto de created_at (puede registrarse tarde).';
+comment on column medication_doses.status        is 'tomada|omitida|postpuesta. postpuesta = se movió para más tarde; deberá generar otro registro cuando ocurra.';
+comment on column medication_doses.notas         is 'Contexto opcional (ej. "vomitó a los 10min"). NUNCA se envía al audit_log.';
 
 comment on table  assistant_messages        is 'Historial IA. `cited_entry_ids` sostiene el KPI >90% verificable. Retención acotada (scripts/retention.py).';
 comment on column assistant_messages.cited_entry_ids is 'IDs de las entradas de bitácora usadas como contexto. Regla sagrada #4.';

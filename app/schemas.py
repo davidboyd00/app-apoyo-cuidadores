@@ -79,6 +79,53 @@ class Medication(MedicationBase):
     activo: bool = True
 
 
+# --- Dosis (adherencia) ---
+
+DoseStatus = Literal["tomada", "omitida", "postpuesta"]
+
+
+class MedicationDoseCreate(BaseModel):
+    scheduled_for: datetime
+    taken_at: datetime | None = None
+    status: DoseStatus
+    notas: str | None = None
+
+
+class MedicationDose(BaseModel):
+    id: UUID
+    patient_id: UUID
+    medication_id: UUID
+    author_id: UUID
+    scheduled_for: datetime
+    taken_at: datetime | None = None
+    status: DoseStatus
+    notas: str | None = None
+    created_at: datetime
+
+
+class UpcomingDose(BaseModel):
+    """Próxima dosis proyectada desde `medications.horarios`. La usa el cliente
+    para agendar notificaciones locales (expo-notifications)."""
+
+    medication_id: UUID
+    nombre: str
+    dosis: str | None = None
+    scheduled_for: datetime
+
+
+class AdherenceReport(BaseModel):
+    """Adherencia calculada sobre dosis registradas en el rango. No proyecta
+    dosis esperadas: si la familia no registró, no cuenta como omisión."""
+
+    desde: datetime
+    hasta: datetime
+    total_dosis_registradas: int
+    tomadas: int
+    omitidas: int
+    postpuestas: int
+    porcentaje_adherencia: float
+
+
 # --- Asistente IA ---
 
 

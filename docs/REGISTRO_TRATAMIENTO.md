@@ -17,7 +17,8 @@ de dato debe actualizar este archivo en el mismo PR.
 | `patients`             | Identidad del paciente + notas clínicas       | **Sensible (salud)**  | Vincular el grupo de cuidado con el titular del dato.                     |
 | `care_members`         | Membresía y rol en grupos de cuidado          | Personal              | Autorización (RLS): quién ve/edita qué.                                   |
 | `log_entries`          | Bitácora clínica (síntomas, ánimo, notas)     | **Sensible (salud)**  | Registro compartido entre familiares + insumo del asistente IA.           |
-| `medications`          | Régimen medicamentoso                         | **Sensible (salud)**  | Seguimiento de adherencia; futura base para recordatorios.                |
+| `medications`          | Régimen medicamentoso                         | **Sensible (salud)**  | Seguimiento clínico; base para el cálculo de próximas dosis.              |
+| `medication_doses`     | Adherencia farmacológica (dosis administradas) | **Sensible (salud)**  | Evidencia clínica + KPI de relevo familiar; insumo del resumen médico.    |
 | `summaries`            | Resúmenes médicos generados                   | **Sensible (salud)**  | Documento derivado para consulta médica.                                  |
 | `assistant_messages`   | Consultas al asistente IA + respuestas        | **Sensible (salud)**  | Historial del asistente; KPI de trazabilidad (`cited_entry_ids`).         |
 | `consents`             | Aceptación versionada de la política          | Personal              | Evidencia del consentimiento (art. 12 Ley 21.719).                        |
@@ -55,6 +56,15 @@ Cada bloque cubre las siete columnas del "registro" que exige la Ley 21.719
 - **Sale a terceros:** No directamente. Podrían aparecer en contexto de LLM si un caregiver los referencia en una entrada.
 - **Retención:** desactivar (soft-delete) preserva el historial de adherencia. Borrado real vía cascade del paciente.
 - **Derechos:** rectificación (`PATCH`); supresión (soft-delete o cascade).
+
+### `medication_doses` (adherencia)
+- **Datos:** `medication_id`, `author_id`, `scheduled_for`, `taken_at`, `status` (tomada/omitida/postpuesta), `notas` (opcional).
+- **Base de licitud:** misma que bitácora (interés legítimo del grupo + necesidad para la prestación del acompañamiento clínico).
+- **Dónde vive:** Supabase.
+- **Quién accede:** miembros del grupo (RLS `doses_select`); escritura admin/caregiver con `author_id = auth.uid()` (RLS `doses_insert`).
+- **Sale a terceros:** No directamente. Puede alimentar `summaries` (que sí pasan por el LLM como contexto transitorio).
+- **Retención:** indefinida mientras exista el paciente (evidencia de adherencia útil clínicamente). Sin políticas UPDATE/DELETE → append-only por diseño. **PENDIENTE JURÍDICO**: definir plazo específico con legal si difiere del régimen de `log_entries`.
+- **Derechos:** acceso (`GET /patients/{id}/medications/{med_id}/doses` para miembros; el propio autor las verá al exportar sus datos si sumamos la tabla a `data-export` — **PENDIENTE PRODUCTO**). Rectificación no aplica (append-only): errores se corrigen registrando una dosis nueva con el status correcto. Supresión vía cascade del paciente o del medicamento.
 
 ### `summaries`
 - **Datos:** `contenido` (texto), `desde`, `hasta`.

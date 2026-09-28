@@ -31,9 +31,7 @@ app = FastAPI(
 # aceptable en dev, NO en producción.
 _cors_origins = settings.cors_origins_list()
 if _cors_origins == ["*"]:
-    log.warning(
-        "CORS_ORIGINS no está seteado: usando '*'. NO desplegar producción así."
-    )
+    log.warning("CORS_ORIGINS no está seteado: usando '*'. NO desplegar producción así.")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
