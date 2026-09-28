@@ -1,0 +1,25 @@
+name: Retención Ley 21.719
+
+on:
+  schedule:
+    # Todos los primeros de mes, 03:00 UTC (00:00 en Chile continental).
+    - cron: "0 3 1 * *"
+  workflow_dispatch: {}  # permite lanzar manualmente desde la UI de GH
+
+jobs:
+  purgar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install deps
+        run: pip install supabase
+      - name: Ejecutar retention.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RETENTION_MONTHS_ASSISTANT: "6"
+        run: python scripts/retention.py

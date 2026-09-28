@@ -1,0 +1,55 @@
+# Configuración de Render (Blueprint). Ver: https://render.com/docs/blueprint-spec
+#
+# Los `envVars` con `sync: false` se configuran a mano en el dashboard:
+# Render los mostrará como placeholders sin valor tras el primer deploy.
+# Los secretos reales NUNCA van en este archivo.
+
+services:
+  - type: web
+    name: caregivers-backend
+    runtime: python
+    plan: free
+    region: oregon  # Render free tier no tiene sudamérica; ojo con latencia
+    branch: main
+    autoDeploy: true
+
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+      # ---- Supabase (Etapa 2) ----
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      # SUPABASE_SERVICE_ROLE_KEY NO va acá: la API no debe usarla nunca
+      # (regla sagrada #1). Vive en secrets de GitHub Actions para
+      # scripts/retention.py.
+
+      # ---- LLM ----
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: LLM_MAX_TOKENS
+        value: "512"
+
+      # ---- Ley 21.719 ----
+      - key: POLICY_VERSION
+        value: "2026-09-11"
+
+      # ---- CORS ----
+      # Cambiar por el/los orígenes reales del cliente móvil antes del
+      # primer release. Si se deja vacío, el server arranca con "*" y
+      # loguéa WARNING.
+      - key: CORS_ORIGINS
+        sync: false
