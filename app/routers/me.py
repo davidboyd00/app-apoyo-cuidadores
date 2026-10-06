@@ -23,7 +23,7 @@ from supabase import Client
 from ..audit import registrar
 from ..config import settings
 from ..deps import get_current_user, get_db
-from ..schemas import DataExport
+from ..schemas import DataExport, Profile, ProfileUpdate
 
 _POLICY_TEXT_PATH = (
     Path(__file__).resolve().parent.parent.parent / "docs" / "POLITICA_PRIVACIDAD.md"
@@ -88,6 +88,41 @@ def consent_aceptar(
         metadata={"version": payload.version},
     )
     return consent_estado(db=db, user=user)
+
+
+@router.get("/profile", response_model=Profile)
+def perfil_actual(db: Client = Depends(get_db), user=Depends(get_current_user)):
+    """Devuelve el perfil del usuario autenticado. Si aún no existe, lo crea
+    vacío y lo devuelve — así el cliente siempre recibe la misma forma."""
+    uid = user["sub"]
+    res = (
+        db.table("profiles")
+        .select("*")
+        .eq("id", uid)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if res:
+        return res[0]
+    creado = db.table("profiles").insert({"id": uid}).execute().data[0]
+    return creado
+
+
+@router.put("/profile", response_model=Profile)
+def actualizar_perfil(
+    payload: ProfileUpdate,
+    db: Client = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    uid = user["sub"]
+    datos = payload.model_dump(mode="json", exclude_unset=True)
+    res = (
+        db.table("profiles")
+        .upsert({"id": uid, **datos, "updated_at": datetime.now(UTC).isoformat()})
+        .execute()
+    )
+    return res.data[0]
 
 
 @router.get("/data-export", response_model=DataExport)

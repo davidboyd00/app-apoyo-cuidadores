@@ -16,6 +16,10 @@ do $$ begin
   create type entry_kind as enum ('nota', 'medicamento', 'sintoma', 'animo', 'otro');
 exception when duplicate_object then null; end $$;
 
+-- Migración in-place: valores agregados post-creación del enum.
+alter type entry_kind add value if not exists 'alimentacion';
+alter type entry_kind add value if not exists 'ejercicio';
+
 do $$ begin
   create type entry_source as enum ('text', 'voice');
 exception when duplicate_object then null; end $$;
@@ -139,6 +143,16 @@ create table if not exists centers (
   telefono   text
 );
 
+-- Perfil del cuidador. Separado de auth.users (que es gestionado por Supabase
+-- Auth y no se debe tocar). Un usuario tiene un perfil opcional con sus datos
+-- de contacto para que el resto de la red de cuidado lo pueda identificar.
+create table if not exists profiles (
+  id          uuid primary key references auth.users(id) on delete cascade,
+  nombre      text,
+  telefono    text,
+  updated_at  timestamptz not null default now()
+);
+
 -- ============================================================================
 -- Helpers (SECURITY DEFINER para evitar recursión en políticas RLS)
 -- ============================================================================
@@ -167,6 +181,26 @@ as $$
   );
 $$;
 
+-- Devuelve true si auth.uid() comparte al menos un grupo de cuidado con el
+-- usuario `target`. Se usa en profiles_select para que los miembros de la red
+-- se vean entre sí sin exponer perfiles de terceros. SECURITY DEFINER evita
+-- recursión al consultar care_members desde una policy de profiles.
+create or replace function shares_care_group(target uuid)
+returns boolean
+language sql
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from care_members me
+    inner join care_members other
+      on me.patient_id = other.patient_id
+    where me.user_id = auth.uid()
+      and other.user_id = target
+  );
+$$;
+
 -- ============================================================================
 -- Row-Level Security
 -- ============================================================================
@@ -179,6 +213,7 @@ alter table medication_doses    enable row level security;
 alter table summaries           enable row level security;
 alter table assistant_messages  enable row level security;
 alter table centers             enable row level security;
+alter table profiles            enable row level security;
 
 -- patients: ver = ser miembro O ser el creador (created_by = uid).
 -- El OR es imprescindible: `INSERT ... RETURNING` aplica esta USING sobre la
@@ -286,6 +321,21 @@ create policy asst_insert on assistant_messages
 -- centers: lectura pública, escritura solo service role (RLS bloquea al resto).
 drop policy if exists centers_read on centers;
 create policy centers_read on centers for select using (true);
+
+-- profiles: ver mi propio perfil + perfiles de usuarios con los que comparto
+-- al menos un grupo de cuidado (regla acordada: la red se identifica entre sí
+-- pero no expone perfiles de terceros). Escritura solo propia.
+drop policy if exists profiles_select on profiles;
+create policy profiles_select on profiles
+  for select using (id = auth.uid() or shares_care_group(id));
+
+drop policy if exists profiles_insert on profiles;
+create policy profiles_insert on profiles
+  for insert with check (id = auth.uid());
+
+drop policy if exists profiles_update on profiles;
+create policy profiles_update on profiles
+  for update using (id = auth.uid()) with check (id = auth.uid());
 
 -- ============================================================================
 -- Trigger: quien crea el paciente queda como admin del grupo automáticamente.
@@ -484,6 +534,115 @@ create policy consents_insert on consents
 -- No policies UPDATE/DELETE → RLS bloquea. Es append-only.
 
 -- ============================================================================
+-- Red de cuidado · RPCs e invariantes
+--
+-- La invitación requiere que el invitado ya tenga cuenta (MVP). Si no la
+-- tiene, el admin tiene que pedírselo que se registre primero — el flujo
+-- de alta de cuenta vive en Supabase Auth, no en esta API.
+-- ============================================================================
+
+-- Invita un usuario existente al grupo por email. SECURITY DEFINER porque
+-- necesita leer auth.users (que no es visible al rol authenticated).
+create or replace function invite_member_by_email(
+  p_patient_id uuid,
+  p_email      text,
+  p_role       care_role default 'caregiver'
+) returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_id uuid;
+begin
+  if not has_role(p_patient_id, 'admin') then
+    raise exception 'solo un admin del grupo puede invitar miembros'
+      using errcode = '42501';
+  end if;
+
+  select id into target_id
+  from auth.users
+  where lower(email) = lower(p_email)
+  limit 1;
+
+  if target_id is null then
+    raise exception 'no existe cuenta con el correo %', p_email
+      using errcode = 'P0002';
+  end if;
+
+  insert into care_members (patient_id, user_id, role)
+  values (p_patient_id, target_id, p_role)
+  on conflict (patient_id, user_id) do update
+    set role = excluded.role;
+
+  return target_id;
+end;
+$$;
+
+revoke all on function invite_member_by_email(uuid, text, care_role) from public;
+grant execute on function invite_member_by_email(uuid, text, care_role) to authenticated;
+
+-- Lista los miembros del grupo con su perfil + email. SECURITY DEFINER para
+-- poder leer auth.users; el `is_member` interno enforcea que solo miembros
+-- del grupo lo puedan llamar.
+create or replace function list_care_members(p_patient_id uuid)
+returns table (
+  user_id    uuid,
+  email      text,
+  role       care_role,
+  nombre     text,
+  telefono   text,
+  joined_at  timestamptz
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select
+    cm.user_id,
+    u.email::text,
+    cm.role,
+    p.nombre,
+    p.telefono,
+    cm.created_at as joined_at
+  from care_members cm
+  left join profiles  p on p.id = cm.user_id
+  left join auth.users u on u.id = cm.user_id
+  where cm.patient_id = p_patient_id
+    and is_member(p_patient_id);
+$$;
+
+revoke all on function list_care_members(uuid) from public;
+grant execute on function list_care_members(uuid) to authenticated;
+
+-- Invariante: no se puede eliminar al último admin del grupo (quedaría sin
+-- quién administre). Para transferir admin: primero crear uno nuevo, después
+-- quitarse. Las operaciones de delete pasan por aquí (RLS ya exige admin).
+create or replace function _no_remove_last_admin()
+returns trigger
+language plpgsql
+as $$
+begin
+  if old.role = 'admin' then
+    if (
+      select count(*)
+      from care_members
+      where patient_id = old.patient_id and role = 'admin'
+    ) <= 1 then
+      raise exception 'no se puede eliminar al único admin del grupo'
+        using errcode = 'P0001';
+    end if;
+  end if;
+  return old;
+end;
+$$;
+
+drop trigger if exists trg_no_remove_last_admin on care_members;
+create trigger trg_no_remove_last_admin
+  before delete on care_members
+  for each row execute function _no_remove_last_admin();
+
+-- ============================================================================
 -- Ley 21.719 · Punto 4: minimización.
 --
 -- Revisión: todo campo de tablas con datos personales/clínicos tiene una
@@ -526,3 +685,7 @@ comment on column assistant_messages.respuesta is 'Texto generado por LLM. Conti
 
 comment on table  audit_log                 is 'Registro de actividades sensibles. Ley 21.719: evidencia operativa. metadata JAMÁS contiene contenido clínico.';
 comment on table  consents                  is 'Aceptación versionada de la política. Append-only (evidencia del momento del consentimiento).';
+
+comment on table  profiles                  is 'Perfil del cuidador (nombre, teléfono) separado de auth.users. Categoría: dato personal. Expuesto solo a usuarios de la misma red de cuidado.';
+comment on column profiles.nombre           is 'Nombre visible en la red de cuidado. Finalidad: identificar al autor de entradas y a los demás miembros.';
+comment on column profiles.telefono         is 'Teléfono de contacto, opcional. Finalidad: coordinación entre miembros ante emergencias.';

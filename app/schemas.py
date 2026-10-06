@@ -25,7 +25,15 @@ class Patient(PatientBase):
 # --- Bitácora ---
 
 EntrySource = Literal["text", "voice"]
-EntryKind = Literal["nota", "medicamento", "sintoma", "animo", "otro"]
+EntryKind = Literal[
+    "nota",
+    "medicamento",
+    "sintoma",
+    "animo",
+    "otro",
+    "alimentacion",
+    "ejercicio",
+]
 
 
 class EntryCreate(BaseModel):
@@ -225,3 +233,40 @@ class Center(BaseModel):
     comuna: str | None = None
     direccion: str | None = None
     telefono: str | None = None
+
+
+# --- Perfiles de cuidadores ---
+
+
+CareRole = Literal["admin", "caregiver", "viewer"]
+
+
+class ProfileUpdate(BaseModel):
+    nombre: str | None = None
+    telefono: str | None = None
+
+
+class Profile(BaseModel):
+    id: UUID
+    nombre: str | None = None
+    telefono: str | None = None
+    updated_at: datetime
+
+
+# --- Red de cuidado (care_members) ---
+
+
+class CareMember(BaseModel):
+    """Miembro del grupo de cuidado tal como lo expone `list_care_members`."""
+
+    user_id: UUID
+    email: str
+    role: CareRole
+    nombre: str | None = None
+    telefono: str | None = None
+    joined_at: datetime
+
+
+class MemberInvite(BaseModel):
+    email: str
+    role: CareRole = "caregiver"

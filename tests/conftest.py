@@ -76,7 +76,8 @@ def clean_data(superuser):
     with superuser.cursor() as cur:
         cur.execute(
             "truncate patients, care_members, log_entries, medications, "
-            "medication_doses, summaries, assistant_messages restart identity cascade"
+            "medication_doses, summaries, assistant_messages, profiles "
+            "restart identity cascade"
         )
         # Borra usuarios de test pero deja el placeholder.
         cur.execute("delete from auth.users where id <> '00000000-0000-0000-0000-000000000000'")

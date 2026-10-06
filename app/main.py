@@ -13,6 +13,7 @@ from .routers import (
     entries,
     me,
     medications,
+    members,
     metrics,
     patients,
     summaries,
@@ -50,6 +51,7 @@ _needs_consent = [Depends(require_consent)]
 app.include_router(patients.router, dependencies=_needs_consent)
 app.include_router(entries.router, dependencies=_needs_consent)
 app.include_router(medications.router, dependencies=_needs_consent)
+app.include_router(members.router, dependencies=_needs_consent)
 app.include_router(assistant.router, dependencies=_needs_consent)
 app.include_router(summaries.router, dependencies=_needs_consent)
 app.include_router(metrics.router, dependencies=_needs_consent)

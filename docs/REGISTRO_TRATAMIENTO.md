@@ -14,6 +14,7 @@ de dato debe actualizar este archivo en el mismo PR.
 | Tabla / origen         | Categoría de dato                             | Sensibilidad          | Finalidad                                                                 |
 |------------------------|-----------------------------------------------|-----------------------|---------------------------------------------------------------------------|
 | `auth.users`           | Identidad del cuidador (email)                | Personal              | Autenticación (delegada a Supabase Auth).                                 |
+| `profiles`             | Nombre y teléfono del cuidador                | Personal              | Identificación entre miembros de la red de cuidado.                        |
 | `patients`             | Identidad del paciente + notas clínicas       | **Sensible (salud)**  | Vincular el grupo de cuidado con el titular del dato.                     |
 | `care_members`         | Membresía y rol en grupos de cuidado          | Personal              | Autorización (RLS): quién ve/edita qué.                                   |
 | `log_entries`          | Bitácora clínica (síntomas, ánimo, notas)     | **Sensible (salud)**  | Registro compartido entre familiares + insumo del asistente IA.           |
@@ -109,6 +110,16 @@ Cada bloque cubre las siete columnas del "registro" que exige la Ley 21.719
 - **Quién accede:** miembros del grupo (RLS `care_members_select`); gestión admin.
 - **Retención:** vida del grupo. Cascade al borrar paciente o al `delete_my_account`.
 - **Derechos:** acceso vía `GET /me/data-export`; supresión al eliminar la cuenta o el paciente.
+- **Invariante:** no se puede eliminar al único admin del grupo (trigger `trg_no_remove_last_admin`), para evitar que el grupo quede huérfano.
+
+### `profiles`
+- **Datos:** `nombre` (opcional), `telefono` (opcional).
+- **Base de licitud:** consentimiento del propio cuidador al completar su perfil.
+- **Dónde vive:** Supabase.
+- **Quién accede:** el propio usuario + miembros con los que comparte al menos un grupo de cuidado (función `shares_care_group`). RLS `profiles_select`. Escritura solo propia.
+- **Sale a terceros:** No.
+- **Retención:** mientras exista la cuenta. Cascade al borrar `auth.users`.
+- **Derechos:** acceso vía `GET /me/profile`; rectificación vía `PUT /me/profile`; supresión vía `DELETE /me`.
 
 ### `centers`
 - No hay dato personal. Datos públicos poblados por scrapers (con service role, sin RLS aplicada para lectura anónima).
