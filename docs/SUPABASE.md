@@ -41,7 +41,7 @@ group by 1, 2
 order by 2;
 ```
 
-**Salida esperada** (9 tablas, 20 policies):
+**Salida esperada** (11 tablas, 25 policies):
 
 | tabla                | policies |
 |----------------------|----------|
@@ -51,8 +51,10 @@ order by 2;
 | centers              | 1        |
 | consents             | 2        |
 | log_entries          | 4        |
+| medication_doses     | 2        |
 | medications          | 2        |
 | patients             | 4        |
+| profiles             | 3        |
 | summaries            | 2        |
 
 Si algún número no coincide, revisar el output de `db/schema.sql` — algo
@@ -77,10 +79,14 @@ que también lo tiene enabled pero con policy pública de lectura.
 select proname, prosecdef
 from pg_proc
 where pronamespace = 'public'::regnamespace
-  and proname in ('is_member', 'has_role', 'delete_my_account', 'audit_write');
+  and proname in (
+    'is_member', 'has_role', 'shares_care_group',
+    'delete_my_account', 'audit_write',
+    'invite_member_by_email', 'list_care_members'
+  );
 ```
 
-Los 4 deben aparecer con `prosecdef = t`.
+Los 7 deben aparecer con `prosecdef = t`.
 
 ## 3. Placeholder de usuario eliminado
 
