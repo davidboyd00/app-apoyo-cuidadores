@@ -689,3 +689,29 @@ comment on table  consents                  is 'Aceptación versionada de la pol
 comment on table  profiles                  is 'Perfil del cuidador (nombre, teléfono) separado de auth.users. Categoría: dato personal. Expuesto solo a usuarios de la misma red de cuidado.';
 comment on column profiles.nombre           is 'Nombre visible en la red de cuidado. Finalidad: identificar al autor de entradas y a los demás miembros.';
 comment on column profiles.telefono         is 'Teléfono de contacto, opcional. Finalidad: coordinación entre miembros ante emergencias.';
+
+-- ============================================================================
+-- Realtime: la bitácora se propaga en vivo entre familiares (Supabase
+-- Realtime, postgres_changes sobre log_entries; RLS entries_select filtra
+-- qué eventos recibe cada usuario).
+--
+-- OJO: `alter publication supabase_realtime add table public.log_entries`
+-- NO es idempotente: es seguro correrlo una sola vez, y una segunda corrida
+-- falla porque la tabla ya está en la publicación. Además la publicación
+-- solo existe en Supabase (no en el Postgres de los tests). Por eso va
+-- dentro de un bloque que lo ejecuta solo si la publicación existe y la
+-- tabla aún no está en ella: así este archivo se puede volver a correr.
+-- ============================================================================
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
+     and not exists (
+       select 1 from pg_publication_tables
+       where pubname = 'supabase_realtime'
+         and schemaname = 'public'
+         and tablename = 'log_entries'
+     ) then
+    alter publication supabase_realtime add table public.log_entries;
+  end if;
+end
+$$;
