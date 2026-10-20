@@ -425,11 +425,18 @@ begin
   update log_entries        set author_id = placeholder where author_id = me;
   update assistant_messages set author_id = placeholder where author_id = me;
 
-  -- Sale del grupo de cuidado. Los pacientes de los que era único miembro
-  -- quedan huérfanos → los eliminamos en cascada (nadie puede acceder ni
-  -- ejercer derechos sobre ellos, y su historial no debe quedar en el vacío).
+  -- Pacientes de los que es el único miembro: quedarían huérfanos → se
+  -- eliminan (nadie más puede acceder ni ejercer derechos sobre ellos, y su
+  -- historial no debe quedar en el vacío). Va ANTES de salir de los grupos:
+  -- así su membresía se borra por la cascada del paciente, que el trigger
+  -- de último admin permite; borrarla directo sería "quitar al único admin".
+  delete from patients p
+  where exists (select 1 from care_members cm where cm.patient_id = p.id and cm.user_id = me)
+    and not exists (select 1 from care_members cm where cm.patient_id = p.id and cm.user_id <> me);
+
+  -- Sale del resto de los grupos. Si es el único admin de un grupo con más
+  -- miembros, el trigger lo impide: debe asignar otro admin antes.
   delete from care_members where user_id = me;
-  delete from patients where id not in (select distinct patient_id from care_members);
 
   -- Finalmente elimina la cuenta de auth (Supabase la maneja como cualquier
   -- fila de auth.users; en el mock local también).
@@ -618,11 +625,23 @@ grant execute on function list_care_members(uuid) to authenticated;
 -- Invariante: no se puede eliminar al último admin del grupo (quedaría sin
 -- quién administre). Para transferir admin: primero crear uno nuevo, después
 -- quitarse. Las operaciones de delete pasan por aquí (RLS ya exige admin).
+--
+-- Excepción: si el paciente ya no existe, el delete viene de la cascada de
+-- `delete from patients` (o de delete_my_account): el grupo entero se está
+-- eliminando y no queda nadie "sin admin". Sin esta excepción, borrar un
+-- paciente o ejercer el derecho de supresión fallaba siempre.
+-- SECURITY DEFINER: la verificación no debe depender de qué filas ve el
+-- usuario por RLS.
 create or replace function _no_remove_last_admin()
 returns trigger
 language plpgsql
+security definer
+set search_path = public
 as $$
 begin
+  if not exists (select 1 from patients where id = old.patient_id) then
+    return old;
+  end if;
   if old.role = 'admin' then
     if (
       select count(*)

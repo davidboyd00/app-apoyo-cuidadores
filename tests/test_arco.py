@@ -59,6 +59,32 @@ class TestDeleteMyAccount:
             cur.execute("select count(*) from patients where id = %s", (str(pid),))
             assert cur.fetchone()[0] == 1
 
+    def test_unico_admin_con_otros_miembros_debe_ceder_admin_antes(
+        self, make_user, add_member, superuser
+    ):
+        # Sin otro admin el grupo quedaría sin administrar: delete_my_account
+        # falla y, por ser una sola transacción, no deja nada a medias.
+        import psycopg
+
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        admin.sql(
+            "insert into log_entries (patient_id, kind, content, occurred_at) "
+            "values (%s, 'nota', 'x', now())",
+            (pid,),
+        )
+
+        with pytest.raises(psycopg.errors.RaiseException):
+            admin.sql("select delete_my_account()")
+
+        with superuser.cursor() as cur:
+            cur.execute("select 1 from auth.users where id = %s", (str(admin.user_id),))
+            assert cur.fetchone() is not None
+            cur.execute("select author_id from log_entries where patient_id = %s", (str(pid),))
+            assert str(cur.fetchone()[0]) == str(admin.user_id)
+
     def test_placeholder_no_puede_autoborrarse(self, base_dsn, clean_data):
         # Actuamos como el usuario placeholder.
         import psycopg
