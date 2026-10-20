@@ -718,19 +718,18 @@ comment on column profiles.telefono         is 'Teléfono de contacto, opcional.
 -- NO es idempotente: es seguro correrlo una sola vez, y una segunda corrida
 -- falla porque la tabla ya está en la publicación. Además la publicación
 -- solo existe en Supabase (no en el Postgres de los tests). Por eso va
--- dentro de un bloque que lo ejecuta solo si la publicación existe y la
--- tabla aún no está en ella: así este archivo se puede volver a correr.
+-- dentro de un bloque que intenta el ALTER y captura esos dos casos
+-- (duplicate_object / undefined_object) con un NOTICE: así este archivo se
+-- puede volver a correr y no depende de consultar el catálogo antes.
 -- ============================================================================
 do $$
 begin
-  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
-     and not exists (
-       select 1 from pg_publication_tables
-       where pubname = 'supabase_realtime'
-         and schemaname = 'public'
-         and tablename = 'log_entries'
-     ) then
-    alter publication supabase_realtime add table public.log_entries;
-  end if;
+  alter publication supabase_realtime add table public.log_entries;
+  raise notice 'Realtime: log_entries agregada a supabase_realtime.';
+exception
+  when duplicate_object then
+    raise notice 'Realtime: log_entries ya estaba en supabase_realtime (sin cambios).';
+  when undefined_object then
+    raise notice 'Realtime: no existe la publicación supabase_realtime (fuera de Supabase); se omite.';
 end
 $$;

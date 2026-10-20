@@ -77,18 +77,19 @@ $$;
 revoke all on function delete_my_account() from public;
 grant execute on function delete_my_account() to authenticated;
 
--- 3) Realtime: log_entries en la publicación (solo si aún no está).
+-- 3) Realtime: log_entries en la publicación. Se intenta el ALTER directo y
+--    se capturan los dos casos esperables (ya estaba / no hay publicación),
+--    sin depender de consultar pg_publication_tables antes. Cada caso deja un
+--    NOTICE visible en el SQL Editor para saber qué pasó.
 do $$
 begin
-  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
-     and not exists (
-       select 1 from pg_publication_tables
-       where pubname = 'supabase_realtime'
-         and schemaname = 'public'
-         and tablename = 'log_entries'
-     ) then
-    alter publication supabase_realtime add table public.log_entries;
-  end if;
+  alter publication supabase_realtime add table public.log_entries;
+  raise notice 'Realtime: log_entries agregada a supabase_realtime.';
+exception
+  when duplicate_object then
+    raise notice 'Realtime: log_entries ya estaba en supabase_realtime (sin cambios).';
+  when undefined_object then
+    raise notice 'Realtime: no existe la publicación supabase_realtime (fuera de Supabase); se omite.';
 end
 $$;
 
