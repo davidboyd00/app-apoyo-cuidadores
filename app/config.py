@@ -6,7 +6,9 @@ class Settings(BaseSettings):
 
     supabase_url: str
     supabase_anon_key: str
-    supabase_jwt_secret: str
+    # Solo para proyectos legacy que firman con HS256. Los proyectos con
+    # llaves asimétricas (ES256/RS256) se verifican contra el JWKS público.
+    supabase_jwt_secret: str | None = None
 
     llm_provider: str = "gemini"
     gemini_api_key: str | None = None
