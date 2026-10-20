@@ -6,7 +6,7 @@ from supabase import Client
 
 from ..audit import registrar
 from ..deps import get_current_user, get_db
-from ..schemas import Entry, EntryCreate, EntryUpdate
+from ..schemas import Entry, EntryCreate, EntryKind, EntryUpdate
 
 router = APIRouter(prefix="/patients/{patient_id}/entries", tags=["entries"])
 
@@ -16,9 +16,27 @@ def listar(
     patient_id: UUID,
     limit: int = Query(50, ge=1, le=200),
     desde: datetime | None = None,
+    kind: EntryKind | None = Query(
+        default=None, description="Filtra por tipo de entrada (en el servidor)."
+    ),
+    antes: datetime | None = Query(
+        default=None,
+        description=(
+            "Cursor de paginación: solo entradas con occurred_at estrictamente "
+            "anterior (ISO 8601). Para la página siguiente, enviar el "
+            "occurred_at de la última entrada recibida."
+        ),
+    ),
     db: Client = Depends(get_db),
     user=Depends(get_current_user),
 ):
+    """Feed de la bitácora, más reciente primero (occurred_at desc).
+
+    `kind` y `antes` son aditivos: sin ellos el comportamiento es el de
+    siempre (`limit` + `desde`). Con `antes` se pagina hacia atrás; dos
+    entradas con exactamente el mismo occurred_at en el borde de página
+    podrían saltarse (caso improbable: occurred_at tiene microsegundos).
+    """
     q = (
         db.table("log_entries")
         .select("*")
@@ -28,6 +46,10 @@ def listar(
     )
     if desde:
         q = q.gte("occurred_at", desde.isoformat())
+    if kind:
+        q = q.eq("kind", kind)
+    if antes:
+        q = q.lt("occurred_at", antes.isoformat())
     data = q.execute().data
 
     # Ley 21.719 · auditoría: registrar solo si vi entradas ajenas.

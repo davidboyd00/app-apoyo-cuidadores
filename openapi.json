@@ -244,6 +244,7 @@
           "entries"
         ],
         "summary": "Listar",
+        "description": "Feed de la bitácora, más reciente primero (occurred_at desc).\n\n`kind` y `antes` son aditivos: sin ellos el comportamiento es el de\nsiempre (`limit` + `desde`). Con `antes` se pagina hacia atrás; dos\nentradas con exactamente el mismo occurred_at en el borde de página\npodrían saltarse (caso improbable: occurred_at tiene microsegundos).",
         "operationId": "listar_patients__patient_id__entries_get",
         "parameters": [
           {
@@ -284,6 +285,52 @@
               ],
               "title": "Desde"
             }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "nota",
+                    "medicamento",
+                    "sintoma",
+                    "animo",
+                    "otro",
+                    "alimentacion",
+                    "ejercicio"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filtra por tipo de entrada (en el servidor).",
+              "title": "Kind"
+            },
+            "description": "Filtra por tipo de entrada (en el servidor)."
+          },
+          {
+            "name": "antes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Cursor de paginación: solo entradas con occurred_at estrictamente anterior (ISO 8601). Para la página siguiente, enviar el occurred_at de la última entrada recibida.",
+              "title": "Antes"
+            },
+            "description": "Cursor de paginación: solo entradas con occurred_at estrictamente anterior (ISO 8601). Para la página siguiente, enviar el occurred_at de la última entrada recibida."
           },
           {
             "name": "authorization",
