@@ -2,7 +2,7 @@ from datetime import datetime, time
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 # --- Pacientes ---
 
@@ -36,21 +36,30 @@ EntryKind = Literal[
 ]
 
 
+# Entrada (crear/editar): `content` no vacío y `occurred_at` con zona
+# horaria obligatoria. Sin zona, "15:30" es ambiguo (¿hora de Chile o UTC?)
+# y la entrada podía quedar corrida horas en la bitácora.
 class EntryCreate(BaseModel):
     kind: EntryKind
-    content: str
-    occurred_at: datetime
+    content: str = Field(min_length=1)
+    occurred_at: AwareDatetime
     source: EntrySource = "text"
 
 
 class EntryUpdate(BaseModel):
     # Solo campos editables (no se puede cambiar author_id ni patient_id).
     kind: EntryKind | None = None
-    content: str | None = None
-    occurred_at: datetime | None = None
+    content: str | None = Field(default=None, min_length=1)
+    occurred_at: AwareDatetime | None = None
 
 
-class Entry(EntryCreate):
+# Respuesta: sin las restricciones de entrada, para no fallar con filas
+# históricas (p. ej. content vacío guardado antes de esta validación).
+class Entry(BaseModel):
+    kind: EntryKind
+    content: str
+    occurred_at: datetime
+    source: EntrySource = "text"
     id: UUID
     patient_id: UUID
     author_id: UUID

@@ -52,6 +52,15 @@ _MSG_PYDANTIC: dict[str, str] = {
 }
 
 
+def _mensaje(e: dict, campo: str) -> str:
+    # Casos donde conviene decir exactamente qué falta, con el campo.
+    if e["type"] == "timezone_aware":
+        return f"{campo} debe incluir zona horaria (ej: 2026-10-19T15:30:00-03:00)"
+    if e["type"] == "string_too_short" and (e.get("ctx") or {}).get("min_length") == 1:
+        return f"{campo} no puede estar vacío"
+    return _MSG_PYDANTIC.get(e["type"], e.get("msg", "Inválido"))
+
+
 def _campo(loc: tuple) -> str:
     # loc típicamente empieza con "body" / "query" / "path"; lo omitimos.
     return ".".join(str(p) for p in loc[1:]) if len(loc) > 1 else str(loc[0])
@@ -74,11 +83,7 @@ def register(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def _validation(request: Request, exc: RequestValidationError):
         errores = [
-            {
-                "campo": _campo(e["loc"]),
-                "msg": _MSG_PYDANTIC.get(e["type"], e.get("msg", "Inválido")),
-            }
-            for e in exc.errors()
+            {"campo": _campo(e["loc"]), "msg": _mensaje(e, _campo(e["loc"]))} for e in exc.errors()
         ]
         return JSONResponse(
             status_code=422,

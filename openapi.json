@@ -3119,6 +3119,7 @@
           },
           "content": {
             "type": "string",
+            "minLength": 1,
             "title": "Content"
           },
           "occurred_at": {
@@ -3169,7 +3170,8 @@
           "content": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "minLength": 1
               },
               {
                 "type": "null"
