@@ -95,14 +95,7 @@ def perfil_actual(db: Client = Depends(get_db), user=Depends(get_current_user)):
     """Devuelve el perfil del usuario autenticado. Si aún no existe, lo crea
     vacío y lo devuelve — así el cliente siempre recibe la misma forma."""
     uid = user["sub"]
-    res = (
-        db.table("profiles")
-        .select("*")
-        .eq("id", uid)
-        .limit(1)
-        .execute()
-        .data
-    )
+    res = db.table("profiles").select("*").eq("id", uid).limit(1).execute().data
     if res:
         return res[0]
     creado = db.table("profiles").insert({"id": uid}).execute().data[0]

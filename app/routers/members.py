@@ -25,9 +25,7 @@ def listar(
     db: Client = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    res = db.rpc(
-        "list_care_members", {"p_patient_id": str(patient_id)}
-    ).execute()
+    res = db.rpc("list_care_members", {"p_patient_id": str(patient_id)}).execute()
     return res.data or []
 
 
@@ -57,9 +55,7 @@ def invitar(
                 f"Pídele que se registre primero.",
             ) from exc
         if code == "42501":
-            raise HTTPException(
-                403, "Solo un admin del grupo puede invitar miembros."
-            ) from exc
+            raise HTTPException(403, "Solo un admin del grupo puede invitar miembros.") from exc
         raise
 
     registrar(
@@ -71,9 +67,7 @@ def invitar(
     )
 
     # Devolver el miembro recién creado desde el listado.
-    miembros = db.rpc(
-        "list_care_members", {"p_patient_id": str(patient_id)}
-    ).execute().data or []
+    miembros = db.rpc("list_care_members", {"p_patient_id": str(patient_id)}).execute().data or []
     for m in miembros:
         if m["email"].lower() == payload.email.lower():
             return m

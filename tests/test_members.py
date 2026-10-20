@@ -32,9 +32,7 @@ class TestInvite:
         )
         assert res[0][0] is not None
 
-        total = admin.sql(
-            "select count(*) from care_members where patient_id = %s", (pid,)
-        )[0][0]
+        total = admin.sql("select count(*) from care_members where patient_id = %s", (pid,))[0][0]
         assert total == 2  # admin + nuevo caregiver
 
     def test_invite_falla_si_email_no_existe(self, make_user):
@@ -129,7 +127,5 @@ class TestUltimoAdmin:
             "delete from care_members where patient_id = %s and user_id = auth.uid()",
             (pid,),
         )
-        total = admin2.sql(
-            "select count(*) from care_members where patient_id = %s", (pid,)
-        )[0][0]
+        total = admin2.sql("select count(*) from care_members where patient_id = %s", (pid,))[0][0]
         assert total == 1

@@ -43,9 +43,7 @@ class TestVerPerfilesDeRed:
 
         _upsert_profile(care, "Carla")
 
-        row = admin.sql(
-            "select nombre from profiles where id = %s", (str(care.user_id),)
-        )
+        row = admin.sql("select nombre from profiles where id = %s", (str(care.user_id),))
         assert row and row[0][0] == "Carla"
 
     def test_no_veo_perfil_de_persona_sin_grupo_compartido(self, make_user):
@@ -75,8 +73,6 @@ class TestEscrituraSoloPropia:
         _upsert_profile(care, "Carla")
 
         # admin lee a Carla (sí) pero NO puede modificarla.
-        admin.sql(
-            "update profiles set nombre = 'HACK' where id = %s", (str(care.user_id),)
-        )
+        admin.sql("update profiles set nombre = 'HACK' where id = %s", (str(care.user_id),))
         row = care.sql("select nombre from profiles where id = auth.uid()")
         assert row[0][0] == "Carla"
