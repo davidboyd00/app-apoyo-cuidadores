@@ -33,5 +33,6 @@ de abajo.
 | Fecha       | Archivo | Estado    | Notas                                              |
 |-------------|---------|-----------|----------------------------------------------------|
 | (baseline)  | —       | aplicado  | `db/schema.sql` corrido en el proyecto Supabase.   |
+| 2026-10-19  | `20261019_admin_cascade_realtime.sql` | pendiente | Trigger de último admin + delete_my_account + log_entries en Realtime (el ALTER de Realtime ya se había corrido a mano). |
 
 Al aplicar una migración, agrega una fila con la fecha y el archivo.
