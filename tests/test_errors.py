@@ -104,3 +104,30 @@ class TestErroresPostgREST:
         r = client.get("/patients")
         assert r.status_code == 500
         assert "algo raro" not in r.json()["detail"]  # no filtramos detalle interno
+
+
+class TestEliminarCuenta:
+    def _apierror(self, code: str) -> APIError:
+        return APIError({"code": code, "message": "x", "hint": None, "details": None})
+
+    def test_unico_admin_con_otros_miembros_es_409_en_espanol(self, client):
+        # Solo falla delete_my_account (la auditoría previa usa otra RPC).
+        def rpc(nombre, *_args, **_kwargs):
+            llamada = MagicMock()
+            if nombre == "delete_my_account":
+                llamada.execute.side_effect = self._apierror("P0001")
+            return llamada
+
+        def db_ultimo_admin():
+            m = MagicMock()
+            m.rpc.side_effect = rpc
+            return m
+
+        app.dependency_overrides[get_db] = db_ultimo_admin
+        r = client.delete("/me", params={"confirmar": "true"})
+        assert r.status_code == 409
+        assert "único admin" in r.json()["detail"]
+
+    def test_borrado_exitoso_es_204(self, client):
+        r = client.delete("/me", params={"confirmar": "true"})
+        assert r.status_code == 204

@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from postgrest.exceptions import APIError
 from pydantic import BaseModel
 from supabase import Client
 
@@ -202,5 +203,17 @@ def eliminar_cuenta(
     )
     # SECURITY DEFINER function en la BD (ver db/schema.sql). La API no toca
     # auth.users ni reasigna author_id directamente — sería violar RLS.
-    db.rpc("delete_my_account").execute()
+    try:
+        db.rpc("delete_my_account").execute()
+    except APIError as exc:
+        # P0001 = trigger del último admin: es el único admin de un grupo con
+        # más miembros. La función es una sola transacción: no se borró nada.
+        if getattr(exc, "code", "") == "P0001":
+            raise HTTPException(
+                409,
+                "No puedes eliminar tu cuenta todavía: eres el único admin de un "
+                "grupo de cuidado con otros miembros. Asigna a otra persona como "
+                "admin y vuelve a intentarlo.",
+            ) from exc
+        raise
     return Response(status_code=204)
