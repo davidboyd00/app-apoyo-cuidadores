@@ -82,6 +82,7 @@ Cada bloque cubre las siete columnas del "registro" que exige la Ley 21.719
 
 ### `summaries`
 - **Datos:** `contenido` (texto), `desde`, `hasta`.
+- **Trazabilidad:** `contenido` termina con una nota generada por el sistema (no por el LLM) con el número de entradas consideradas, corregidas y anuladas del período, y para cada corrección la fecha de la entrada, la fecha de la última corrección y el nombre de quien corrigió (`profiles.nombre`). No incluye el contenido clínico ni el motivo de las correcciones (minimización); esos quedan en el historial de la app.
 - **Base de licitud:** interés legítimo (documentación clínica derivada).
 - **Dónde vive:** Supabase.
 - **Quién accede:** miembros del grupo.
