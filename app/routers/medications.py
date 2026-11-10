@@ -2,10 +2,11 @@ from datetime import datetime, time, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from supabase import Client
 
 from ..deps import get_current_user, get_db
+from ..idempotencia import insertar_o_recuperar
 from ..schemas import (
     AdherenceReport,
     Medication,
@@ -101,9 +102,12 @@ def registrar_dosis(
     patient_id: UUID,
     medication_id: UUID,
     payload: MedicationDoseCreate,
+    response: Response,
     db: Client = Depends(get_db),
     user=Depends(get_current_user),
 ):
+    """Registra una dosis. Idempotente con `client_id` (carga offline): un
+    reintento devuelve la dosis ya registrada con status 200."""
     # Coherencia status/taken_at (defensa en profundidad: el CHECK de la BD
     # también lo garantiza).
     if payload.status == "tomada" and payload.taken_at is None:
@@ -116,8 +120,16 @@ def registrar_dosis(
         "patient_id": str(patient_id),
         "medication_id": str(medication_id),
     }
-    res = db.table("medication_doses").insert(row).execute()
-    return res.data[0]
+    fila, creada = insertar_o_recuperar(
+        db,
+        "medication_doses",
+        row,
+        author_id=user["sub"],
+        client_id=payload.client_id,
+    )
+    if not creada:
+        response.status_code = 200
+    return fila
 
 
 @router.get("/{medication_id}/doses", response_model=list[MedicationDose])

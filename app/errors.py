@@ -58,6 +58,10 @@ def _mensaje(e: dict, campo: str) -> str:
         return f"{campo} debe incluir zona horaria (ej: 2026-10-19T15:30:00-03:00)"
     if e["type"] == "string_too_short" and (e.get("ctx") or {}).get("min_length") == 1:
         return f"{campo} no puede estar vacío"
+    # Validadores propios (field_validator) lanzan ValueError con un mensaje en
+    # español y accionable: se muestra tal cual, sin el prefijo de Pydantic.
+    if e["type"] == "value_error" and e.get("msg", "").startswith("Value error, "):
+        return e["msg"].removeprefix("Value error, ")
     return _MSG_PYDANTIC.get(e["type"], e.get("msg", "Inválido"))
 
 

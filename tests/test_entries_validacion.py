@@ -73,14 +73,58 @@ def test_crear_con_content_vacio_es_422_en_espanol(client):
     assert _errores(r)["content"] == "content no puede estar vacío"
 
 
-def test_editar_sin_zona_horaria_es_422(client):
-    r = client.patch(f"{URL}/{ENTRADA}", json={"occurred_at": "2026-10-19T15:30:00"})
+REVISION = f"{URL}/{ENTRADA}/revisiones"
+BASE_REVISION = {"motivo": "error de dosis", "kind": "nota", "content": "corregido"}
+
+
+def test_revisar_sin_zona_horaria_es_422(client):
+    r = client.post(REVISION, json=BASE_REVISION | {"occurred_at": "2026-10-19T15:30:00"})
     assert "occurred_at" in _errores(r)
 
 
-def test_editar_con_content_vacio_es_422(client):
-    r = client.patch(f"{URL}/{ENTRADA}", json={"content": ""})
+def test_revisar_con_content_vacio_es_422(client):
+    r = client.post(
+        REVISION, json=BASE_REVISION | {"content": "", "occurred_at": "2026-10-19T15:30:00-03:00"}
+    )
     assert _errores(r)["content"] == "content no puede estar vacío"
+
+
+def test_revisar_con_content_solo_espacios_es_422(client):
+    r = client.post(
+        REVISION,
+        json=BASE_REVISION | {"content": "   ", "occurred_at": "2026-10-19T15:30:00-03:00"},
+    )
+    assert "content" in _errores(r)
+
+
+def test_revisar_sin_motivo_es_422(client):
+    r = client.post(
+        REVISION,
+        json={"kind": "nota", "content": "x", "occurred_at": "2026-10-19T15:30:00-03:00"},
+    )
+    assert "motivo" in _errores(r)
+
+
+def test_motivo_de_solo_espacios_es_422(client):
+    r = client.post(
+        REVISION,
+        json=BASE_REVISION | {"motivo": "     ", "occurred_at": "2026-10-19T15:30:00-03:00"},
+    )
+    assert (
+        _errores(r)["motivo"] == "El motivo debe tener al menos 3 caracteres (sin contar espacios)"
+    )
+
+
+def test_anular_sin_motivo_es_422(client):
+    r = client.post(f"{URL}/{ENTRADA}/anulacion", json={})
+    assert "motivo" in _errores(r)
+
+
+def test_patch_y_delete_ya_no_existen(client):
+    """La bitácora es insert-only: no hay edición ni borrado directo sobre la
+    entrada. Las correcciones van por POST .../revisiones y .../anulacion."""
+    assert client.patch(f"{URL}/{ENTRADA}", json={"content": "x"}).status_code == 404
+    assert client.delete(f"{URL}/{ENTRADA}").status_code == 404
 
 
 @pytest.mark.parametrize(

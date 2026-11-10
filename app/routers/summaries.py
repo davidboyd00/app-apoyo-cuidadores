@@ -39,10 +39,13 @@ async def generar(
 ):
     hasta = datetime.now(UTC)
     desde = hasta - timedelta(days=dias)
+    # Solo entradas vigentes: una anulada (registrada por error) no entra al
+    # resumen que lee el médico tratante.
     entradas = (
-        db.table("log_entries")
+        db.table("log_entries_vigentes")
         .select("occurred_at, kind, content")
         .eq("patient_id", str(patient_id))
+        .eq("anulada", False)
         .gte("occurred_at", desde.isoformat())
         .lte("occurred_at", hasta.isoformat())
         .order("occurred_at", desc=True)

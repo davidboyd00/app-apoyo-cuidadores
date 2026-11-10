@@ -34,5 +34,6 @@ de abajo.
 |-------------|---------|-----------|----------------------------------------------------|
 | (baseline)  | —       | aplicado  | `db/schema.sql` corrido en el proyecto Supabase.   |
 | 2026-10-19  | `20261019_admin_cascade_realtime.sql` | aplicado  | Trigger de último admin + delete_my_account + log_entries en Realtime. Verificado (a)(b)(c). log_entries se agregó a mano a la publicación; el bloque DO se reescribió después para no depender del catálogo y avisar con NOTICE. |
+| 2026-11-03  | `20261103_historial_inmutable_offline.sql` | pendiente de aplicar | Historial inmutable de la bitácora (`log_entry_revisions`, `log_entries_vigentes`; log_entries insert-only) + `client_id`/`registrado_en` para carga offline. Reemplaza PATCH/DELETE de entradas por revisiones y anulación. Requiere PostgreSQL 15+ (vista con `security_invoker`). Además corrige `delete_my_account`, que no reasignaba la autoría de `medication_doses`. |
 
 Al aplicar una migración, agrega una fila con la fecha y el archivo.

@@ -244,7 +244,7 @@
           "entries"
         ],
         "summary": "Listar",
-        "description": "Feed de la bitácora, más reciente primero (occurred_at desc).\n\n`kind` y `antes` son aditivos: sin ellos el comportamiento es el de\nsiempre (`limit` + `desde`). Con `antes` se pagina hacia atrás; dos\nentradas con exactamente el mismo occurred_at en el borde de página\npodrían saltarse (caso improbable: occurred_at tiene microsegundos).",
+        "description": "Feed de la bitácora, más reciente primero (occurred_at desc).\n\nDevuelve el estado vigente de cada entrada: si fue corregida, `content`,\n`kind` y `occurred_at` son los de la última revisión. El historial completo\nestá en `GET /entries/{id}/revisiones`.",
         "operationId": "listar_patients__patient_id__entries_get",
         "parameters": [
           {
@@ -333,6 +333,18 @@
             "description": "Cursor de paginación: solo entradas con occurred_at estrictamente anterior (ISO 8601). Para la página siguiente, enviar el occurred_at de la última entrada recibida."
           },
           {
+            "name": "incluir_anuladas",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Incluye entradas anuladas (marcadas con `anulada=true`). Por defecto no aparecen.",
+              "default": false,
+              "title": "Incluir Anuladas"
+            },
+            "description": "Incluye entradas anuladas (marcadas con `anulada=true`). Por defecto no aparecen."
+          },
+          {
             "name": "authorization",
             "in": "header",
             "required": false,
@@ -381,6 +393,7 @@
           "entries"
         ],
         "summary": "Crear",
+        "description": "Registra una entrada. Es idempotente si viene `client_id`.\n\nUn reintento con el mismo `client_id` devuelve la entrada ya creada con\nstatus 200 (no duplica ni falla). Con `registrado_en` se guarda la hora en\nque se escribió sin conexión; `created_at` es la hora de sincronización.",
         "operationId": "crear_patients__patient_id__entries_post",
         "parameters": [
           {
@@ -444,13 +457,86 @@
         }
       }
     },
-    "/patients/{patient_id}/entries/{entry_id}": {
-      "patch": {
+    "/patients/{patient_id}/entries/{entry_id}/revisiones": {
+      "get": {
         "tags": [
           "entries"
         ],
-        "summary": "Actualizar",
-        "operationId": "actualizar_patients__patient_id__entries__entry_id__patch",
+        "summary": "Listar Revisiones",
+        "description": "Historial completo de una entrada: revisiones y anulación, en orden\ncronológico. Lo ven todos los miembros del grupo (RLS).",
+        "operationId": "listar_revisiones_patients__patient_id__entries__entry_id__revisiones_get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entry Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EntryRevision"
+                  },
+                  "title": "Response Listar Revisiones Patients  Patient Id  Entries  Entry Id  Revisiones Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "entries"
+        ],
+        "summary": "Revisar",
+        "description": "Corrige una entrada. No la modifica: agrega una revisión con autor, hora\ny motivo. Solo el autor original o un admin pueden revisar (RLS).",
+        "operationId": "revisar_patients__patient_id__entries__entry_id__revisiones_post",
         "parameters": [
           {
             "name": "patient_id",
@@ -494,13 +580,13 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/EntryUpdate"
+                "$ref": "#/components/schemas/EntryRevisionEditar"
               }
             }
           }
         },
         "responses": {
-          "200": {
+          "201": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -521,13 +607,16 @@
             }
           }
         }
-      },
-      "delete": {
+      }
+    },
+    "/patients/{patient_id}/entries/{entry_id}/anulacion": {
+      "post": {
         "tags": [
           "entries"
         ],
-        "summary": "Eliminar",
-        "operationId": "eliminar_patients__patient_id__entries__entry_id__delete",
+        "summary": "Anular",
+        "description": "Anula una entrada (p. ej. registrada por error). La entrada no se borra:\nqueda en el historial marcada como anulada, con motivo, autor y hora.\nLa anulación es definitiva.",
+        "operationId": "anular_patients__patient_id__entries__entry_id__anulacion_post",
         "parameters": [
           {
             "name": "patient_id",
@@ -566,9 +655,26 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryAnulacion"
+              }
+            }
+          }
+        },
         "responses": {
-          "204": {
-            "description": "Successful Response"
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entry"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -877,6 +983,7 @@
           "medications"
         ],
         "summary": "Registrar Dosis",
+        "description": "Registra una dosis. Idempotente con `client_id` (carga offline): un\nreintento devuelve la dosis ya registrada con status 200.",
         "operationId": "registrar_dosis_patients__patient_id__medications__medication_id__doses_post",
         "parameters": [
           {
@@ -3009,6 +3116,13 @@
             "type": "array",
             "title": "Entradas Bitacora"
           },
+          "revisiones_bitacora": {
+            "items": {
+              "$ref": "#/components/schemas/EntryRevision"
+            },
+            "type": "array",
+            "title": "Revisiones Bitacora"
+          },
           "mensajes_asistente": {
             "items": {
               "$ref": "#/components/schemas/AssistantMessage"
@@ -3030,6 +3144,7 @@
           "usuario",
           "membresias",
           "entradas_bitacora",
+          "revisiones_bitacora",
           "mensajes_asistente",
           "pacientes_creados"
         ],
@@ -3088,6 +3203,40 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "registrado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registrado En"
+          },
+          "anulada": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anulada"
+          },
+          "editada": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Editada"
           }
         },
         "type": "object",
@@ -3101,6 +3250,21 @@
           "created_at"
         ],
         "title": "Entry"
+      },
+      "EntryAnulacion": {
+        "properties": {
+          "motivo": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Motivo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "motivo"
+        ],
+        "title": "EntryAnulacion"
       },
       "EntryCreate": {
         "properties": {
@@ -3135,6 +3299,30 @@
             ],
             "title": "Source",
             "default": "text"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "registrado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registrado En"
           }
         },
         "type": "object",
@@ -3145,8 +3333,40 @@
         ],
         "title": "EntryCreate"
       },
-      "EntryUpdate": {
+      "EntryRevision": {
         "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "entry_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Entry Id"
+          },
+          "patient_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Patient Id"
+          },
+          "author_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Author Id"
+          },
+          "accion": {
+            "type": "string",
+            "enum": [
+              "editar",
+              "anular"
+            ],
+            "title": "Accion"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo"
+          },
           "kind": {
             "anyOf": [
               {
@@ -3170,8 +3390,7 @@
           "content": {
             "anyOf": [
               {
-                "type": "string",
-                "minLength": 1
+                "type": "string"
               },
               {
                 "type": "null"
@@ -3190,10 +3409,65 @@
               }
             ],
             "title": "Occurred At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
           }
         },
         "type": "object",
-        "title": "EntryUpdate"
+        "required": [
+          "id",
+          "entry_id",
+          "patient_id",
+          "author_id",
+          "accion",
+          "motivo",
+          "created_at"
+        ],
+        "title": "EntryRevision"
+      },
+      "EntryRevisionEditar": {
+        "properties": {
+          "motivo": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Motivo"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "nota",
+              "medicamento",
+              "sintoma",
+              "animo",
+              "otro",
+              "alimentacion",
+              "ejercicio"
+            ],
+            "title": "Kind"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Content"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Occurred At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "motivo",
+          "kind",
+          "content",
+          "occurred_at"
+        ],
+        "title": "EntryRevisionEditar"
       },
       "HTTPValidationError": {
         "properties": {
@@ -3398,6 +3672,18 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "registrado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registrado En"
           }
         },
         "type": "object",
@@ -3450,6 +3736,30 @@
               }
             ],
             "title": "Notas"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "registrado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registrado En"
           }
         },
         "type": "object",

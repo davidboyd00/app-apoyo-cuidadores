@@ -45,9 +45,21 @@ Cada bloque cubre las siete columnas del "registro" que exige la Ley 21.719
 - **Base de licitud:** interés legítimo del grupo de cuidado y necesidad para prestación del servicio de acompañamiento. **PENDIENTE JURÍDICO**: confirmar con legal si esta base cubre el registro que hace un cuidador sobre el paciente, o si requiere consentimiento específico del titular.
 - **Dónde vive:** Supabase. `content` **nunca** sale a logs de aplicación (regla dura documentada en el `COMMENT ON COLUMN`).
 - **Quién accede:** miembros del grupo (RLS `entries_select`). Escritura solo admin/caregiver.
-- **Sale a terceros:** Sí, al proveedor LLM como contexto **transitorio** al invocar `/assistant/ask` — el proveedor no persiste (ver §Terceros abajo).
+- **Integridad:** la tabla es **insert-only**: no tiene policies UPDATE/DELETE, así que ni el autor ni el admin pueden modificar o borrar un registro original. Las correcciones y anulaciones van en `log_entry_revisions` (ver abajo). Así la evidencia clínica no puede reescribirse en silencio (Ley 21.719, principio de integridad y responsabilidad).
+- **Sale a terceros:** Sí, al proveedor LLM como contexto **transitorio** al invocar `/assistant/ask` — el proveedor no persiste (ver §Terceros abajo). El asistente y los resúmenes solo leen entradas **vigentes** (no anuladas).
 - **Retención:** indefinida mientras exista el paciente. Se preserva incluso si el autor original se elimina (`author_id` reasignado al usuario placeholder — ver `db/schema.sql`).
-- **Derechos:** acceso (`GET /me/data-export` incluye las entradas del propio autor); rectificación (`PATCH /entries/{id}` autor o admin); supresión (`DELETE /entries/{id}` autor o admin).
+- **Derechos:** acceso (`GET /me/data-export` incluye las entradas originales y las revisiones del propio autor); rectificación (`POST /entries/{id}/revisiones`, autor o admin, con motivo obligatorio; el original se conserva); anulación (`POST /entries/{id}/anulacion`, autor o admin, con motivo; queda visible en el historial como anulada); supresión de la entrada completa vía cascade del paciente (`DELETE /patients/{id}`, solo admin) o `DELETE /me`.
+- **Carga offline:** `client_id` (idempotencia) y `registrado_en` (hora del dispositivo) — ver `log_entries.client_id` en `db/schema.sql`.
+
+### `log_entry_revisions` (historial de la bitácora)
+- **Datos:** `entry_id`, `author_id`, `accion` (`editar`/`anular`), `motivo` (texto libre, obligatorio), estado nuevo (`kind`, `content`, `occurred_at`; solo en `editar`), `created_at`.
+- **Categoría:** dato sensible (salud), igual que `log_entries`, porque `content` y `motivo` pueden contener información clínica.
+- **Base de licitud:** la misma que la bitácora.
+- **Quién accede:** miembros del grupo (RLS `revisiones_select`). Escritura: admin o caregiver, como autor de la revisión, sobre entradas que puede revisar (autor original o admin), sin revisar entradas ya anuladas (RLS `revisiones_insert`). Sin policies UPDATE/DELETE: el historial es inmodificable.
+- **Sale a terceros:** No. Las revisiones no se envían al LLM; el asistente solo ve el estado vigente.
+- **Retención:** igual que `log_entries`. **PENDIENTE JURÍDICO**: conciliar la inmutabilidad con el derecho de supresión (Ley 21.719). Propuesta técnica vigente: la supresión de la entrada se resuelve borrando el paciente (cascade); la revisión no se borra de forma aislada.
+- **Derechos:** acceso vía `GET /entries/{id}/revisiones` y `GET /me/data-export` (`revisiones_bitacora`).
+- **Registro de auditoría:** `audit_log` registra la acción (`revisar_entrada`, `anular_entrada`, `read_revisiones_ajenas`) con ids y flags, nunca el `motivo` ni el `content`.
 
 ### `medications`
 - **Datos:** `nombre`, `dosis`, `frecuencia_horas`, `horarios`, `notas`, `activo`.
@@ -65,6 +77,7 @@ Cada bloque cubre las siete columnas del "registro" que exige la Ley 21.719
 - **Quién accede:** miembros del grupo (RLS `doses_select`); escritura admin/caregiver con `author_id = auth.uid()` (RLS `doses_insert`).
 - **Sale a terceros:** No directamente. Puede alimentar `summaries` (que sí pasan por el LLM como contexto transitorio).
 - **Retención:** indefinida mientras exista el paciente (evidencia de adherencia útil clínicamente). Sin políticas UPDATE/DELETE → append-only por diseño. **PENDIENTE JURÍDICO**: definir plazo específico con legal si difiere del régimen de `log_entries`.
+- **Carga offline:** `client_id` (idempotencia por autor) y `registrado_en` (hora del dispositivo). Un reintento con el mismo `client_id` devuelve la dosis ya registrada.
 - **Derechos:** acceso (`GET /patients/{id}/medications/{med_id}/doses` para miembros; el propio autor las verá al exportar sus datos si sumamos la tabla a `data-export` — **PENDIENTE PRODUCTO**). Rectificación no aplica (append-only): errores se corrigen registrando una dosis nueva con el status correcto. Supresión vía cascade del paciente o del medicamento.
 
 ### `summaries`

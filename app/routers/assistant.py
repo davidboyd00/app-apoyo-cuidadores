@@ -32,10 +32,13 @@ async def preguntar(
     user=Depends(get_current_user),
 ):
     desde = datetime.now(UTC) - timedelta(days=payload.ventana_dias)
+    # El asistente solo ve entradas vigentes: nunca responde con datos anulados
+    # y `cited_entry_ids` solo cita lo que realmente vio.
     entradas = (
-        db.table("log_entries")
+        db.table("log_entries_vigentes")
         .select("id, occurred_at, kind, content")
         .eq("patient_id", str(patient_id))
+        .eq("anulada", False)
         .gte("occurred_at", desde.isoformat())
         .order("occurred_at", desc=True)
         .limit(200)

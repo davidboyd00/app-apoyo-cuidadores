@@ -6,9 +6,33 @@ from supabase import Client
 
 from ..audit import registrar
 from ..deps import get_current_user, get_db
-from ..schemas import Entry, EntryCreate, EntryKind, EntryUpdate
+from ..idempotencia import insertar_o_recuperar
+from ..schemas import (
+    Entry,
+    EntryAnulacion,
+    EntryCreate,
+    EntryKind,
+    EntryRevision,
+    EntryRevisionEditar,
+)
 
 router = APIRouter(prefix="/patients/{patient_id}/entries", tags=["entries"])
+
+# Lectura: estado vigente de cada entrada (la base de la bitácora es insert-only).
+VISTA = "log_entries_vigentes"
+
+
+def _vigente(db: Client, patient_id: UUID, entry_id: UUID) -> dict | None:
+    res = (
+        db.table(VISTA)
+        .select("*")
+        .eq("id", str(entry_id))
+        .eq("patient_id", str(patient_id))
+        .limit(1)
+        .execute()
+        .data
+    )
+    return res[0] if res else None
 
 
 @router.get("", response_model=list[Entry])
@@ -27,18 +51,21 @@ def listar(
             "occurred_at de la última entrada recibida."
         ),
     ),
+    incluir_anuladas: bool = Query(
+        default=False,
+        description="Incluye entradas anuladas (marcadas con `anulada=true`). Por defecto no aparecen.",
+    ),
     db: Client = Depends(get_db),
     user=Depends(get_current_user),
 ):
     """Feed de la bitácora, más reciente primero (occurred_at desc).
 
-    `kind` y `antes` son aditivos: sin ellos el comportamiento es el de
-    siempre (`limit` + `desde`). Con `antes` se pagina hacia atrás; dos
-    entradas con exactamente el mismo occurred_at en el borde de página
-    podrían saltarse (caso improbable: occurred_at tiene microsegundos).
+    Devuelve el estado vigente de cada entrada: si fue corregida, `content`,
+    `kind` y `occurred_at` son los de la última revisión. El historial completo
+    está en `GET /entries/{id}/revisiones`.
     """
     q = (
-        db.table("log_entries")
+        db.table(VISTA)
         .select("*")
         .eq("patient_id", str(patient_id))
         .order("occurred_at", desc=True)
@@ -50,6 +77,8 @@ def listar(
         q = q.eq("kind", kind)
     if antes:
         q = q.lt("occurred_at", antes.isoformat())
+    if not incluir_anuladas:
+        q = q.eq("anulada", False)
     data = q.execute().data
 
     # Ley 21.719 · auditoría: registrar solo si vi entradas ajenas.
@@ -69,68 +98,129 @@ def listar(
 def crear(
     patient_id: UUID,
     payload: EntryCreate,
+    response: Response,
     db: Client = Depends(get_db),
     user=Depends(get_current_user),
 ):
+    """Registra una entrada. Es idempotente si viene `client_id`.
+
+    Un reintento con el mismo `client_id` devuelve la entrada ya creada con
+    status 200 (no duplica ni falla). Con `registrado_en` se guarda la hora en
+    que se escribió sin conexión; `created_at` es la hora de sincronización.
+    """
     # author_id lo pone la base con default auth.uid() (ver db/schema.sql).
     row = payload.model_dump(mode="json") | {"patient_id": str(patient_id)}
-    res = db.table("log_entries").insert(row).execute()
-    return res.data[0]
-
-
-@router.patch("/{entry_id}", response_model=Entry)
-def actualizar(
-    patient_id: UUID,
-    entry_id: UUID,
-    payload: EntryUpdate,
-    db: Client = Depends(get_db),
-    user=Depends(get_current_user),
-):
-    cambios = payload.model_dump(mode="json", exclude_unset=True)
-    if not cambios:
-        raise HTTPException(400, "No hay campos que actualizar")
-    res = (
-        db.table("log_entries")
-        .update(cambios)
-        .eq("id", str(entry_id))
-        .eq("patient_id", str(patient_id))
-        .execute()
-    )
-    if not res.data:
-        # Filtro y RLS colapsan aquí: puede ser "no existe" o "sin permisos".
-        raise HTTPException(404, "Entrada no encontrada o sin permisos para editarla")
-    registrar(
+    fila, creada = insertar_o_recuperar(
         db,
-        accion="update_entry",
-        recurso_tipo="log_entries",
-        recurso_id=entry_id,
-        patient_id=patient_id,
-        metadata={"campos": sorted(cambios.keys())},
+        "log_entries",
+        row,
+        author_id=user["sub"],
+        client_id=payload.client_id,
     )
-    return res.data[0]
+    if not creada:
+        response.status_code = 200
+        return _vigente(db, patient_id, fila["id"]) or fila
+    return fila | {"anulada": False, "editada": False}
 
 
-@router.delete("/{entry_id}", status_code=204, response_class=Response)
-def eliminar(
+@router.get("/{entry_id}/revisiones", response_model=list[EntryRevision])
+def listar_revisiones(
     patient_id: UUID,
     entry_id: UUID,
     db: Client = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    res = (
-        db.table("log_entries")
-        .delete()
-        .eq("id", str(entry_id))
+    """Historial completo de una entrada: revisiones y anulación, en orden
+    cronológico. Lo ven todos los miembros del grupo (RLS)."""
+    data = (
+        db.table("log_entry_revisions")
+        .select("*")
+        .eq("entry_id", str(entry_id))
         .eq("patient_id", str(patient_id))
+        .order("created_at", desc=False)
         .execute()
+        .data
     )
-    if not res.data:
-        raise HTTPException(404, "Entrada no encontrada o sin permisos para eliminarla")
+    ajenas = sum(1 for r in data if r["author_id"] != user["sub"])
+    if ajenas:
+        registrar(
+            db,
+            accion="read_revisiones_ajenas",
+            recurso_tipo="log_entry_revisions",
+            recurso_id=entry_id,
+            patient_id=patient_id,
+            metadata={"total": len(data), "ajenas": ajenas},
+        )
+    return data
+
+
+@router.post("/{entry_id}/revisiones", response_model=Entry, status_code=201)
+def revisar(
+    patient_id: UUID,
+    entry_id: UUID,
+    payload: EntryRevisionEditar,
+    db: Client = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Corrige una entrada. No la modifica: agrega una revisión con autor, hora
+    y motivo. Solo el autor original o un admin pueden revisar (RLS)."""
+    actual = _vigente(db, patient_id, entry_id)
+    if actual is None:
+        # RLS y filtro colapsan aquí: no existe o no tienes acceso.
+        raise HTTPException(404, "Entrada no encontrada o sin permisos para revisarla")
+    if actual["anulada"]:
+        raise HTTPException(400, "La entrada está anulada y no admite más revisiones")
+
+    db.table("log_entry_revisions").insert(
+        payload.model_dump(mode="json")
+        | {
+            "entry_id": str(entry_id),
+            "patient_id": str(patient_id),
+            "accion": "editar",
+        }
+    ).execute()
     registrar(
         db,
-        accion="delete_entry",
+        accion="revisar_entrada",
         recurso_tipo="log_entries",
         recurso_id=entry_id,
         patient_id=patient_id,
+        metadata={"accion": "editar"},
     )
-    return Response(status_code=204)
+    return _vigente(db, patient_id, entry_id)
+
+
+@router.post("/{entry_id}/anulacion", response_model=Entry, status_code=201)
+def anular(
+    patient_id: UUID,
+    entry_id: UUID,
+    payload: EntryAnulacion,
+    db: Client = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Anula una entrada (p. ej. registrada por error). La entrada no se borra:
+    queda en el historial marcada como anulada, con motivo, autor y hora.
+    La anulación es definitiva."""
+    actual = _vigente(db, patient_id, entry_id)
+    if actual is None:
+        raise HTTPException(404, "Entrada no encontrada o sin permisos para anularla")
+    if actual["anulada"]:
+        raise HTTPException(400, "La entrada ya está anulada")
+
+    db.table("log_entry_revisions").insert(
+        payload.model_dump(mode="json")
+        | {
+            "entry_id": str(entry_id),
+            "patient_id": str(patient_id),
+            "accion": "anular",
+        }
+    ).execute()
+    registrar(
+        db,
+        accion="anular_entrada",
+        recurso_tipo="log_entries",
+        recurso_id=entry_id,
+        patient_id=patient_id,
+        metadata={"accion": "anular"},
+    )
+    return _vigente(db, patient_id, entry_id)

@@ -50,18 +50,87 @@ create table if not exists care_members (
   primary key (patient_id, user_id)
 );
 
+-- Bitácora INSERT-ONLY: el registro original nunca se modifica ni se borra.
+-- Las correcciones y anulaciones son filas en log_entry_revisions (abajo) y el
+-- estado actual se lee desde la vista log_entries_vigentes.
 create table if not exists log_entries (
-  id           uuid primary key default gen_random_uuid(),
-  patient_id   uuid not null references patients(id) on delete cascade,
-  author_id    uuid not null default auth.uid() references auth.users(id) on delete restrict,
-  kind         entry_kind not null,
-  content      text not null,
-  occurred_at  timestamptz not null,
-  source       entry_source not null default 'text',
-  created_at   timestamptz not null default now()
+  id            uuid primary key default gen_random_uuid(),
+  patient_id    uuid not null references patients(id) on delete cascade,
+  author_id     uuid not null default auth.uid() references auth.users(id) on delete restrict,
+  kind          entry_kind not null,
+  content       text not null,
+  occurred_at   timestamptz not null,
+  source        entry_source not null default 'text',
+  created_at    timestamptz not null default now(),
+  -- Offline: client_id = idempotencia (reintentos de la cola no duplican);
+  -- registrado_en = hora en el dispositivo. created_at = hora de sincronización.
+  client_id     uuid,
+  registrado_en timestamptz
 );
 create index if not exists log_entries_patient_occurred_idx
   on log_entries (patient_id, occurred_at desc);
+
+-- Migración in-place (bases creadas antes de offline/historial).
+alter table log_entries add column if not exists client_id     uuid;
+alter table log_entries add column if not exists registrado_en timestamptz;
+create unique index if not exists log_entries_author_client_uk
+  on log_entries (author_id, client_id) where client_id is not null;
+
+-- Revisiones de la bitácora (append-only). 'editar' guarda el estado nuevo
+-- completo; 'anular' marca la entrada como anulada (terminal). Cada fila
+-- registra autor, hora de creación y motivo obligatorio.
+create table if not exists log_entry_revisions (
+  id           uuid primary key default gen_random_uuid(),
+  entry_id     uuid not null references log_entries(id) on delete cascade,
+  patient_id   uuid not null references patients(id) on delete cascade,
+  author_id    uuid not null default auth.uid() references auth.users(id) on delete restrict,
+  accion       text not null check (accion in ('editar', 'anular')),
+  motivo       text not null check (char_length(btrim(motivo)) between 3 and 500),
+  kind         entry_kind,
+  content      text,
+  occurred_at  timestamptz,
+  created_at   timestamptz not null default clock_timestamp(),
+  check (
+    (accion = 'editar' and kind is not null and occurred_at is not null
+       and content is not null and char_length(btrim(content)) > 0) or
+    (accion = 'anular' and kind is null and occurred_at is null and content is null)
+  )
+);
+create unique index if not exists log_entry_revisions_una_anulacion_uk
+  on log_entry_revisions (entry_id) where accion = 'anular';
+create index if not exists log_entry_revisions_entry_idx
+  on log_entry_revisions (entry_id, created_at desc);
+create index if not exists log_entry_revisions_patient_idx
+  on log_entry_revisions (patient_id, created_at desc);
+
+-- Estado vigente de cada entrada (security_invoker: aplica la RLS del consultor).
+create or replace view log_entries_vigentes with (security_invoker = true) as
+select
+  e.id,
+  e.patient_id,
+  e.author_id,
+  e.source,
+  e.registrado_en,
+  e.created_at,
+  coalesce(ed.kind, e.kind)               as kind,
+  coalesce(ed.content, e.content)         as content,
+  coalesce(ed.occurred_at, e.occurred_at) as occurred_at,
+  (an.id is not null)                     as anulada,
+  (ed.id is not null)                     as editada
+from log_entries e
+left join lateral (
+  select r.id, r.kind, r.content, r.occurred_at
+  from log_entry_revisions r
+  where r.entry_id = e.id and r.accion = 'editar'
+  order by r.created_at desc, r.id desc
+  limit 1
+) ed on true
+left join lateral (
+  select r.id
+  from log_entry_revisions r
+  where r.entry_id = e.id and r.accion = 'anular'
+  limit 1
+) an on true;
 
 create table if not exists medications (
   id                uuid primary key default gen_random_uuid(),
@@ -101,6 +170,12 @@ create table if not exists medication_doses (
     (status = 'postpuesta')
   )
 );
+-- Offline: idempotencia y hora de registro en el dispositivo (ver log_entries).
+alter table medication_doses add column if not exists client_id     uuid;
+alter table medication_doses add column if not exists registrado_en timestamptz;
+create unique index if not exists medication_doses_author_client_uk
+  on medication_doses (author_id, client_id) where client_id is not null;
+
 create index if not exists medication_doses_patient_sched_idx
   on medication_doses (patient_id, scheduled_for desc);
 create index if not exists medication_doses_med_sched_idx
@@ -201,6 +276,37 @@ as $$
   );
 $$;
 
+-- Entrada de bitácora anulada (anular es terminal: no admite más revisiones).
+create or replace function entrada_anulada(eid uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from log_entry_revisions
+    where entry_id = eid and accion = 'anular'
+  );
+$$;
+
+-- Quién puede revisar/anular: el autor original o un admin del grupo, y la
+-- entrada debe pertenecer al paciente indicado (evita revisiones cruzadas).
+create or replace function puede_revisar_entrada(eid uuid, pid uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from log_entries e
+    where e.id = eid
+      and e.patient_id = pid
+      and (e.author_id = auth.uid() or has_role(pid, 'admin'))
+  );
+$$;
+
 -- ============================================================================
 -- Row-Level Security
 -- ============================================================================
@@ -208,6 +314,7 @@ $$;
 alter table patients            enable row level security;
 alter table care_members        enable row level security;
 alter table log_entries         enable row level security;
+alter table log_entry_revisions enable row level security;
 alter table medications         enable row level security;
 alter table medication_doses    enable row level security;
 alter table summaries           enable row level security;
@@ -258,20 +365,28 @@ create policy entries_insert on log_entries
     and author_id = auth.uid()
   );
 
--- Update/delete de entradas: SOLO el autor original o un admin del grupo.
--- Regla acordada con el equipo (no cubierta por CLAUDE.md original):
--- balancea corrección de errores tipográficos con trazabilidad de autoría.
--- El WITH CHECK previene además "reasignar" la autoría de la entrada.
+-- Sin policies UPDATE/DELETE en log_entries: la bitácora es insert-only. Las
+-- correcciones y anulaciones van en log_entry_revisions (abajo), con autor,
+-- hora y motivo, para que nada se pierda ni se reescriba en silencio.
 drop policy if exists entries_update on log_entries;
-create policy entries_update on log_entries
-  for update
-  using (author_id = auth.uid() or has_role(patient_id, 'admin'))
-  with check (author_id = auth.uid() or has_role(patient_id, 'admin'));
-
 drop policy if exists entries_delete on log_entries;
-create policy entries_delete on log_entries
-  for delete
-  using (author_id = auth.uid() or has_role(patient_id, 'admin'));
+
+-- log_entry_revisions: leer si soy miembro (historial visible para el grupo).
+-- Escribir como admin/caregiver, siendo el autor de la revisión, sobre una
+-- entrada que puedo revisar (autor original o admin) y que no está anulada.
+-- Sin policies UPDATE/DELETE: el historial es inmodificable.
+drop policy if exists revisiones_select on log_entry_revisions;
+create policy revisiones_select on log_entry_revisions
+  for select using (is_member(patient_id));
+
+drop policy if exists revisiones_insert on log_entry_revisions;
+create policy revisiones_insert on log_entry_revisions
+  for insert with check (
+    author_id = auth.uid()
+    and (has_role(patient_id, 'admin') or has_role(patient_id, 'caregiver'))
+    and puede_revisar_entrada(entry_id, patient_id)
+    and not entrada_anulada(entry_id)
+  );
 
 -- medications: leer si soy miembro; admin/caregiver gestionan.
 drop policy if exists meds_select on medications;
@@ -422,8 +537,10 @@ begin
   end if;
 
   -- Anonimiza autoría en registros que se preservan.
-  update log_entries        set author_id = placeholder where author_id = me;
-  update assistant_messages set author_id = placeholder where author_id = me;
+  update log_entries          set author_id = placeholder where author_id = me;
+  update log_entry_revisions  set author_id = placeholder where author_id = me;
+  update medication_doses     set author_id = placeholder where author_id = me;
+  update assistant_messages   set author_id = placeholder where author_id = me;
 
   -- Pacientes de los que es el único miembro: quedarían huérfanos → se
   -- eliminan (nadie más puede acceder ni ejercer derechos sobre ellos, y su
@@ -680,7 +797,11 @@ comment on column patients.notas            is 'Opcional. Contexto clínico gene
 comment on column patients.created_by       is 'Trigger _patient_owner_admin lo usa para asignar rol admin al creador. Referenciado por policy patients_select.';
 comment on column patients.created_at       is 'Ordering histórico y trazabilidad interna. No expuesto en UI de otros usuarios.';
 
-comment on table  log_entries               is 'Bitácora clínica compartida. Append-only en el patrón; edición restringida al autor o admin. Categoría: dato sensible (salud).';
+comment on table  log_entries               is 'Bitácora clínica compartida. INSERT-ONLY: sin UPDATE/DELETE. Correcciones y anulaciones en log_entry_revisions. Categoría: dato sensible (salud).';
+comment on table  log_entry_revisions       is 'Historial inmutable de la bitácora: revisiones (editar) y anulaciones (anular) con autor, hora de creación y motivo. Append-only. Categoría: dato sensible (salud). Motivo: nunca se copia a audit_log.';
+comment on column log_entry_revisions.motivo is 'Justificación obligatoria (3–500 caracteres). Texto libre: NUNCA se pone en audit_log ni en logs de aplicación.';
+comment on column log_entries.client_id     is 'Idempotencia offline: uuid generado por el cliente. Único por autor; un reintento devuelve la fila existente.';
+comment on column log_entries.registrado_en is 'Hora de registro en el dispositivo (offline). created_at es la hora de sincronización.';
 comment on column log_entries.author_id     is 'KPI de relevo familiar (>60%). Regla sagrada #5. Sobrevive a delete_my_account: se reasigna al usuario placeholder.';
 comment on column log_entries.kind          is 'Tipo enumerado (nota, medicamento, síntoma, ánimo, otro). Permite filtros y estadísticas sin leer content.';
 comment on column log_entries.content       is 'Texto libre. NUNCA se pone en audit_log ni en logs de aplicación.';
@@ -729,6 +850,19 @@ begin
 exception
   when duplicate_object then
     raise notice 'Realtime: log_entries ya estaba en supabase_realtime (sin cambios).';
+  when undefined_object then
+    raise notice 'Realtime: no existe la publicación supabase_realtime (fuera de Supabase); se omite.';
+end
+$$;
+
+-- Las revisiones y anulaciones también se propagan al feed en tiempo real.
+do $$
+begin
+  alter publication supabase_realtime add table public.log_entry_revisions;
+  raise notice 'Realtime: log_entry_revisions agregada a supabase_realtime.';
+exception
+  when duplicate_object then
+    raise notice 'Realtime: log_entry_revisions ya estaba en supabase_realtime (sin cambios).';
   when undefined_object then
     raise notice 'Realtime: no existe la publicación supabase_realtime (fuera de Supabase); se omite.';
 end

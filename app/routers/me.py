@@ -131,11 +131,22 @@ def data_export(db: Client = Depends(get_db), user=Depends(get_current_user)):
         .execute()
         .data
     )
+    # Originales tal como se escribieron (la bitácora es insert-only) y todas
+    # las revisiones/anulaciones del usuario: así la exportación conserva la
+    # evidencia completa, no solo el estado vigente.
     entradas = (
         db.table("log_entries")
         .select("*")
         .eq("author_id", uid)
         .order("occurred_at", desc=True)
+        .execute()
+        .data
+    )
+    revisiones = (
+        db.table("log_entry_revisions")
+        .select("*")
+        .eq("author_id", uid)
+        .order("created_at", desc=True)
         .execute()
         .data
     )
@@ -156,6 +167,7 @@ def data_export(db: Client = Depends(get_db), user=Depends(get_current_user)):
         recurso_id=uid,
         metadata={
             "entradas": len(entradas),
+            "revisiones": len(revisiones),
             "mensajes": len(mensajes),
             "pacientes_creados": len(pacientes),
         },
@@ -165,6 +177,7 @@ def data_export(db: Client = Depends(get_db), user=Depends(get_current_user)):
         usuario={"id": uid, "email": user.get("email")},
         membresias=membresias,
         entradas_bitacora=entradas,
+        revisiones_bitacora=revisiones,
         mensajes_asistente=mensajes,
         pacientes_creados=pacientes,
     )

@@ -136,7 +136,12 @@ class TestRoles:
 # ---------------------------------------------------------------------------
 
 
-class TestEdicionEntradas:
+class TestHistorialInmutable:
+    """La bitácora es insert-only: ni autor ni admin modifican o borran el
+    registro original. Las correcciones y anulaciones son revisiones
+    append-only con autor, hora y motivo (Ley 21.719: integridad y
+    responsabilidad; validez probatoria del resumen médico)."""
+
     def _crear_entry(self, sess, patient_id: str, texto: str = "original") -> str:
         return sess.sql(
             "insert into log_entries (patient_id, kind, content, occurred_at) "
@@ -144,32 +149,89 @@ class TestEdicionEntradas:
             (patient_id, texto),
         )[0][0]
 
-    def test_autor_puede_editar_su_entrada(self, make_user, add_member):
+    def _revisar(self, sess, eid, pid, content="corregido", motivo="error de tipeo"):
+        sess.sql(
+            "insert into log_entry_revisions "
+            "(entry_id, patient_id, accion, motivo, kind, content, occurred_at) "
+            "values (%s, %s, 'editar', %s, 'nota', %s, now())",
+            (eid, pid, motivo, content),
+        )
+
+    def _anular(self, sess, eid, pid, motivo="registrado en paciente equivocado"):
+        sess.sql(
+            "insert into log_entry_revisions (entry_id, patient_id, accion, motivo) "
+            "values (%s, %s, 'anular', %s)",
+            (eid, pid, motivo),
+        )
+
+    # --- Insert-only ------------------------------------------------------
+
+    def test_autor_no_puede_modificar_su_original(self, make_user, add_member):
         admin = make_user("admin@test.cl")
         care = make_user("care@test.cl")
         pid = _crear_paciente(admin, "Doña Elba")
         add_member(pid, care.user_id, "caregiver")
-
         eid = self._crear_entry(care, pid, "original")
-        care.sql("update log_entries set content = 'corregido' where id = %s", (eid,))
-        assert (
-            care.sql("select content from log_entries where id = %s", (eid,))[0][0] == "corregido"
-        )
 
-    def test_admin_puede_editar_entrada_ajena(self, make_user, add_member):
+        care.sql("update log_entries set content = 'hack' where id = %s", (eid,))
+        assert care.sql("select content from log_entries where id = %s", (eid,))[0][0] == "original"
+
+    def test_admin_no_puede_modificar_entrada_ajena(self, make_user, add_member):
         admin = make_user("admin@test.cl")
         care = make_user("care@test.cl")
         pid = _crear_paciente(admin, "Doña Elba")
         add_member(pid, care.user_id, "caregiver")
         eid = self._crear_entry(care, pid, "original")
 
-        admin.sql("update log_entries set content = 'admin editó' where id = %s", (eid,))
+        admin.sql("update log_entries set content = 'admin' where id = %s", (eid,))
         assert (
-            admin.sql("select content from log_entries where id = %s", (eid,))[0][0]
-            == "admin editó"
+            admin.sql("select content from log_entries where id = %s", (eid,))[0][0] == "original"
         )
 
-    def test_caregiver_no_puede_editar_entrada_de_otro(self, make_user, add_member):
+    def test_nadie_puede_borrar_un_registro_original(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        eid = self._crear_entry(care, pid)
+
+        care.sql("delete from log_entries where id = %s", (eid,))
+        admin.sql("delete from log_entries where id = %s", (eid,))
+        assert admin.sql("select count(*) from log_entries where id = %s", (eid,))[0][0] == 1
+
+    # --- Revisiones -------------------------------------------------------
+
+    def test_autor_revisa_su_entrada_y_el_original_queda_intacto(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        eid = self._crear_entry(care, pid, "original")
+
+        self._revisar(care, eid, pid, content="corregido")
+
+        vigente = care.sql(
+            "select content, editada, anulada from log_entries_vigentes where id = %s", (eid,)
+        )[0]
+        assert vigente == ("corregido", True, False)
+        # El registro original no cambió: la evidencia sigue ahí.
+        assert care.sql("select content from log_entries where id = %s", (eid,))[0][0] == "original"
+
+    def test_admin_revisa_entrada_ajena_y_queda_su_autoria(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        eid = self._crear_entry(care, pid)
+
+        self._revisar(admin, eid, pid, content="admin corrigió")
+
+        autor = admin.sql("select author_id from log_entry_revisions where entry_id = %s", (eid,))[
+            0
+        ][0]
+        assert str(autor) == str(admin.user_id)
+
+    def test_caregiver_no_revisa_entrada_de_otro(self, make_user, add_member):
         admin = make_user("admin@test.cl")
         care_a = make_user("cA@test.cl")
         care_b = make_user("cB@test.cl")
@@ -178,31 +240,198 @@ class TestEdicionEntradas:
         add_member(pid, care_b.user_id, "caregiver")
         eid = self._crear_entry(care_a, pid, "de A")
 
-        # UPDATE con RLS que no matchea → 0 filas afectadas, sin error.
-        care_b.sql("update log_entries set content = 'hack' where id = %s", (eid,))
-        assert care_a.sql("select content from log_entries where id = %s", (eid,))[0][0] == "de A"
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            self._revisar(care_b, eid, pid, content="hack")
+        assert (
+            care_a.sql("select content from log_entries_vigentes where id = %s", (eid,))[0][0]
+            == "de A"
+        )
 
-    def test_autor_puede_borrar_su_entrada(self, make_user, add_member):
+    def test_viewer_no_revisa(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        viewer = make_user("viewer@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        add_member(pid, viewer.user_id, "viewer")
+        eid = self._crear_entry(care, pid)
+
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            self._revisar(viewer, eid, pid)
+
+    def test_revision_no_puede_falsificar_autoria(self, make_user, add_member):
         admin = make_user("admin@test.cl")
         care = make_user("care@test.cl")
         pid = _crear_paciente(admin, "Doña Elba")
         add_member(pid, care.user_id, "caregiver")
         eid = self._crear_entry(care, pid)
 
-        care.sql("delete from log_entries where id = %s", (eid,))
-        assert care.sql("select count(*) from log_entries")[0][0] == 0
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            care.sql(
+                "insert into log_entry_revisions "
+                "(entry_id, patient_id, author_id, accion, motivo, kind, content, occurred_at) "
+                "values (%s, %s, %s, 'editar', 'suplantación', 'nota', 'x', now())",
+                (eid, pid, str(admin.user_id)),
+            )
 
-    def test_caregiver_no_puede_borrar_entrada_de_otro(self, make_user, add_member):
+    def test_revision_no_puede_apuntar_a_entrada_de_otro_paciente(self, make_user, add_member):
         admin = make_user("admin@test.cl")
-        care_a = make_user("cA@test.cl")
-        care_b = make_user("cB@test.cl")
-        pid = _crear_paciente(admin, "Doña Elba")
-        add_member(pid, care_a.user_id, "caregiver")
-        add_member(pid, care_b.user_id, "caregiver")
-        eid = self._crear_entry(care_a, pid)
+        care = make_user("care@test.cl")
+        p1 = _crear_paciente(admin, "Paciente 1")
+        p2 = _crear_paciente(admin, "Paciente 2")
+        add_member(p1, care.user_id, "caregiver")
+        add_member(p2, care.user_id, "caregiver")
+        eid = self._crear_entry(care, p1)
 
-        care_b.sql("delete from log_entries where id = %s", (eid,))
-        assert care_a.sql("select count(*) from log_entries where id = %s", (eid,))[0][0] == 1
+        # Entrada de p1 "revisada" bajo p2: el helper exige que coincidan.
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            self._revisar(care, eid, p2)
+
+    def test_motivo_de_solo_espacios_es_rechazado(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        eid = self._crear_entry(care, pid)
+
+        with pytest.raises(psycopg.errors.CheckViolation):
+            self._revisar(care, eid, pid, motivo="   ")
+
+    def test_editar_exige_estado_nuevo_completo(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        eid = self._crear_entry(care, pid)
+
+        with pytest.raises(psycopg.errors.CheckViolation):
+            care.sql(
+                "insert into log_entry_revisions (entry_id, patient_id, accion, motivo) "
+                "values (%s, %s, 'editar', 'sin contenido nuevo')",
+                (eid, pid),
+            )
+
+    def test_historial_inmutable_ni_autor_ni_admin_lo_modifican(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        eid = self._crear_entry(care, pid)
+        self._revisar(care, eid, pid)
+
+        care.sql("update log_entry_revisions set motivo = 'reescrito' where entry_id = %s", (eid,))
+        care.sql("delete from log_entry_revisions where entry_id = %s", (eid,))
+        admin.sql("delete from log_entry_revisions where entry_id = %s", (eid,))
+        assert (
+            admin.sql("select count(*) from log_entry_revisions where entry_id = %s", (eid,))[0][0]
+            == 1
+        )
+
+    def test_miembro_lee_el_historial_completo(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        viewer = make_user("viewer@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        add_member(pid, viewer.user_id, "viewer")
+        eid = self._crear_entry(care, pid)
+        self._revisar(care, eid, pid, content="v2")
+        self._revisar(care, eid, pid, content="v3")
+
+        assert (
+            viewer.sql("select count(*) from log_entry_revisions where entry_id = %s", (eid,))[0][0]
+            == 2
+        )
+
+    def test_no_miembro_no_ve_historial_ni_vista(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        ajeno = make_user("ajeno@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        eid = self._crear_entry(care, pid)
+        self._revisar(care, eid, pid)
+
+        assert ajeno.sql("select count(*) from log_entry_revisions")[0][0] == 0
+        assert ajeno.sql("select count(*) from log_entries_vigentes")[0][0] == 0
+
+    # --- Anulación --------------------------------------------------------
+
+    def test_anulacion_marca_la_entrada_sin_borrarla(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        eid = self._crear_entry(care, pid, "dosis registrada por error")
+
+        self._anular(care, eid, pid)
+
+        vigente = care.sql(
+            "select content, anulada from log_entries_vigentes where id = %s", (eid,)
+        )[0]
+        assert vigente == ("dosis registrada por error", True)
+        assert care.sql("select count(*) from log_entries where id = %s", (eid,))[0][0] == 1
+
+    def test_anulacion_es_terminal(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        eid = self._crear_entry(care, pid)
+        self._anular(care, eid, pid)
+
+        # La política (not entrada_anulada) bloquea antes que el índice único:
+        # ni el autor ni el admin pueden anular de nuevo ni reabrir la entrada.
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            self._anular(admin, eid, pid, motivo="segunda anulación")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            self._revisar(care, eid, pid, content="intento de reabrir")
+
+    def test_vista_respeta_rls_entre_grupos(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        ajeno = make_user("ajeno@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        self._crear_entry(admin, pid)
+
+        assert ajeno.sql("select count(*) from log_entries_vigentes")[0][0] == 0
+
+    # --- Idempotencia offline ---------------------------------------------
+
+    def test_client_id_es_unico_por_autor(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        cid = "11111111-1111-1111-1111-111111111111"
+        care.sql(
+            "insert into log_entries (patient_id, kind, content, occurred_at, client_id) "
+            "values (%s, 'nota', 'offline', now(), %s)",
+            (pid, cid),
+        )
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            care.sql(
+                "insert into log_entries (patient_id, kind, content, occurred_at, client_id) "
+                "values (%s, 'nota', 'reintento', now(), %s)",
+                (pid, cid),
+            )
+
+    def test_client_id_puede_repetirse_entre_autores(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        cid = "22222222-2222-2222-2222-222222222222"
+        admin.sql(
+            "insert into log_entries (patient_id, kind, content, occurred_at, client_id) "
+            "values (%s, 'nota', 'a', now(), %s)",
+            (pid, cid),
+        )
+        care.sql(
+            "insert into log_entries (patient_id, kind, content, occurred_at, client_id) "
+            "values (%s, 'nota', 'b', now(), %s)",
+            (pid, cid),
+        )
+        assert admin.sql("select count(*) from log_entries where client_id = %s", (cid,))[0][0] == 2
 
 
 # ---------------------------------------------------------------------------

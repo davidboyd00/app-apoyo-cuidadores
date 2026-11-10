@@ -32,9 +32,10 @@ def relevo_familiar(
         raise HTTPException(400, "El parámetro `desde` debe ser anterior a `hasta`")
 
     entradas = (
-        db.table("log_entries")
+        db.table("log_entries_vigentes")
         .select("author_id")
         .eq("patient_id", str(patient_id))
+        .eq("anulada", False)
         .gte("occurred_at", desde.isoformat())
         .lte("occurred_at", hasta.isoformat())
         .execute()
