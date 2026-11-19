@@ -1,21 +1,31 @@
 """Generación del resumen médico (núcleo, sin HTTP).
 
-Se usa desde el endpoint (en segundo plano) y debe mantenerse sin acoplarse a
-FastAPI: así se prueba aislado y se puede reutilizar en otro proceso.
+Se usa desde el endpoint (en segundo plano) y desde el cron diario. No depende
+de FastAPI: así se prueba aislado y se reutiliza en otro proceso.
 
 El contenido final = texto de la IA + nota de trazabilidad armada por el
 código. La IA nunca escribe la nota.
+
+Medición: cada etapa (consulta, LLM, nota) deja un log con su duración en ms.
+Los logs NUNCA llevan contenido clínico: solo nombre de etapa, tiempo y conteos.
 """
 
 from __future__ import annotations
 
+import logging
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from supabase import Client
 
+from .config import settings
 from .llm import ask_llm
+
+log = logging.getLogger("resumen")
 
 PROMPT_RESUMEN = (
     "Genera un resumen médico breve (máx. 8 líneas) apto para consulta médica, "
@@ -34,6 +44,17 @@ except ZoneInfoNotFoundError:  # sin tzdata en el sistema: se informa en UTC
     _ZONA = UTC
 
 
+@contextmanager
+def medir(etapa: str) -> Iterator[None]:
+    """Registra la duración de una etapa. Solo tiempos, sin contenido."""
+    inicio = time.perf_counter()
+    try:
+        yield
+    finally:
+        ms = (time.perf_counter() - inicio) * 1000
+        log.info("resumen_tiempo etapa=%s ms=%.1f", etapa, ms)
+
+
 def _fecha(valor: str | datetime) -> str:
     dt = datetime.fromisoformat(valor) if isinstance(valor, str) else valor
     if dt.tzinfo is None:
@@ -41,64 +62,65 @@ def _fecha(valor: str | datetime) -> str:
     return dt.astimezone(_ZONA).strftime("%d-%m-%Y %H:%M")
 
 
+def _armar_contexto(
+    entradas: list[dict], max_entradas: int, max_caracteres: int
+) -> tuple[str, int]:
+    """Toma las entradas más recientes hasta los límites. Devuelve (texto, enviadas).
+
+    `entradas` llega ordenada de la más reciente a la más antigua.
+    """
+    lineas: list[str] = []
+    usados = 0
+    for e in entradas[:max_entradas]:
+        marca = " [corregida]" if e.get("editada") else ""
+        linea = f"{e['occurred_at']} · {e['kind']}{marca}: {e['content']}"
+        if usados + len(linea) + 1 > max_caracteres:
+            break
+        lineas.append(linea)
+        usados += len(linea) + 1
+    return "\n".join(lineas), len(lineas)
+
+
 def _nota_trazabilidad(
     db: Client,
-    patient_id: UUID,
     desde: datetime,
     hasta: datetime,
-    entradas: list[dict],
+    vigentes: list[dict],
+    anuladas: int,
+    enviadas: int,
 ) -> str:
-    """Nota determinista (la arma el código, no el LLM) que da validez
-    probatoria al resumen: cuántas entradas se consideraron, cuáles fueron
-    corregidas (cuándo y por quién) y cuántas se anularon y quedaron fuera.
+    """Nota determinista (la arma el código). Todos los datos de corrección
+    vienen de la vista `log_entries_vigentes`: no hay consultas extra, salvo
+    la de nombres de quienes corrigieron.
 
     Minimización (Ley 21.719): no repite contenido clínico ni el motivo de las
     correcciones; esos detalles quedan en el historial dentro de la app.
     """
-    anuladas = (
-        db.table("log_entries_vigentes")
-        .select("id")
-        .eq("patient_id", str(patient_id))
-        .eq("anulada", True)
-        .gte("occurred_at", desde.isoformat())
-        .lte("occurred_at", hasta.isoformat())
-        .execute()
-        .data
-    )
-    editadas = [e for e in entradas if e.get("editada")]
+    editadas = [e for e in vigentes if e.get("editada")]
 
     lineas = [
         "---",
         "Trazabilidad del registro (generada por el sistema, no por IA)",
         f"Período: {_fecha(desde)} a {_fecha(hasta)}",
         (
-            f"Entradas consideradas: {len(entradas)} · Corregidas: {len(editadas)} · "
-            f"Anuladas y excluidas del resumen: {len(anuladas)}"
+            f"Entradas consideradas: {len(vigentes)} · Corregidas: {len(editadas)} · "
+            f"Anuladas y excluidas del resumen: {anuladas}"
         ),
     ]
+    if enviadas < len(vigentes):
+        lineas.append(
+            f"El texto del resumen se generó con las {enviadas} entradas más recientes "
+            f"de {len(vigentes)} por límite de tamaño."
+        )
 
     if not editadas and not anuladas:
         lineas.append("No hubo correcciones ni anulaciones en el período.")
         return "\n".join(lineas)
 
     if editadas:
-        revisiones = (
-            db.table("log_entry_revisions")
-            .select("entry_id, author_id, created_at")
-            .in_("entry_id", [e["id"] for e in editadas])
-            .eq("accion", "editar")
-            .order("created_at", desc=True)
-            .execute()
-            .data
+        autores = list(
+            {e["ultima_revision_autor_id"] for e in editadas if e.get("ultima_revision_autor_id")}
         )
-        # Última corrección y número de correcciones por entrada.
-        ultima: dict[str, dict] = {}
-        conteo: dict[str, int] = {}
-        for r in revisiones:
-            ultima.setdefault(r["entry_id"], r)
-            conteo[r["entry_id"]] = conteo.get(r["entry_id"], 0) + 1
-
-        autores = list({r["author_id"] for r in ultima.values()})
         perfiles = (
             db.table("profiles").select("id, nombre").in_("id", autores).execute().data
             if autores
@@ -108,15 +130,12 @@ def _nota_trazabilidad(
 
         lineas.append("Correcciones:")
         for e in editadas[:MAX_CORRECCIONES_LISTADAS]:
-            r = ultima.get(e["id"])
-            if r is None:
-                continue
-            quien = nombres.get(r["author_id"], "un miembro del grupo")
-            veces = conteo[e["id"]]
+            quien = nombres.get(e.get("ultima_revision_autor_id"), "un miembro del grupo")
+            veces = e.get("revisiones_count") or 1
             extra = f" ({veces} correcciones)" if veces > 1 else ""
             lineas.append(
                 f"- Entrada del {_fecha(e['occurred_at'])} ({e['kind']}): "
-                f"corregida el {_fecha(r['created_at'])} por {quien}{extra}."
+                f"corregida el {_fecha(e['ultima_revision_at'])} por {quien}{extra}."
             )
         if len(editadas) > MAX_CORRECCIONES_LISTADAS:
             lineas.append(f"- … y {len(editadas) - MAX_CORRECCIONES_LISTADAS} más.")
@@ -129,22 +148,34 @@ def _nota_trazabilidad(
 
 
 async def construir_resumen(db: Client, patient_id: UUID, desde: datetime, hasta: datetime) -> str:
-    """Devuelve el contenido completo del resumen para el período."""
-    entradas = (
-        db.table("log_entries_vigentes")
-        .select("id, occurred_at, kind, content, editada")
-        .eq("patient_id", str(patient_id))
-        .eq("anulada", False)
-        .gte("occurred_at", desde.isoformat())
-        .lte("occurred_at", hasta.isoformat())
-        .order("occurred_at", desc=True)
-        .execute()
-        .data
+    """Devuelve el contenido completo del resumen para el período.
+
+    Una sola consulta a la vista trae entradas vigentes, anuladas y los datos
+    de corrección. El LLM recibe solo las más recientes dentro de los límites.
+    """
+    with medir("consulta"):
+        filas = (
+            db.table("log_entries_vigentes")
+            .select(
+                "id, occurred_at, kind, content, editada, anulada, "
+                "revisiones_count, ultima_revision_at, ultima_revision_autor_id"
+            )
+            .eq("patient_id", str(patient_id))
+            .gte("occurred_at", desde.isoformat())
+            .lte("occurred_at", hasta.isoformat())
+            .order("occurred_at", desc=True)
+            .execute()
+            .data
+        )
+    vigentes = [f for f in filas if not f["anulada"]]
+    anuladas = len(filas) - len(vigentes)
+
+    contexto, enviadas = _armar_contexto(
+        vigentes, settings.resumen_max_entradas, settings.resumen_max_caracteres
     )
-    contexto = "\n".join(
-        f"{e['occurred_at']} · {e['kind']}{' [corregida]' if e.get('editada') else ''}: "
-        f"{e['content']}"
-        for e in entradas
-    )
-    texto_ia = await ask_llm(contexto, PROMPT_RESUMEN)
-    return f"{texto_ia}\n\n{_nota_trazabilidad(db, patient_id, desde, hasta, entradas)}"
+    with medir("llm"):
+        texto_ia = await ask_llm(contexto, PROMPT_RESUMEN)
+
+    with medir("nota"):
+        nota = _nota_trazabilidad(db, desde, hasta, vigentes, anuladas, enviadas)
+    return f"{texto_ia}\n\n{nota}"

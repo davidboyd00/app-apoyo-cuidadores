@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     anthropic_api_key: str | None = None
     llm_max_tokens: int = 512
+    # Acotar el contexto del LLM: menos tokens de entrada = respuesta más rápida
+    # y más barata. Se envían las entradas más recientes hasta estos límites.
+    resumen_max_entradas: int = 200
+    resumen_max_caracteres: int = 12000
 
     # Ley 21.719 · versión vigente de la política de privacidad. Cuando cambie,
     # todos los usuarios deben re-aceptar; los endpoints sensibles retornan 409

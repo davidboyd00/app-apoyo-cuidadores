@@ -571,3 +571,45 @@ class TestResumenesAsincronos:
         assert str(admin.sql("select author_id from summaries where id = %s", (rid,))[0][0]) == str(
             admin.user_id
         )
+
+
+class TestVistaTrazabilidad:
+    """La vista entrega los datos de corrección, con la misma RLS que la bitácora."""
+
+    def test_cuenta_revisiones_y_ultimo_autor(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        eid = care.sql(
+            "insert into log_entries (patient_id, kind, content, occurred_at) "
+            "values (%s, 'nota', 'original', now()) returning id",
+            (pid,),
+        )[0][0]
+        for texto in ("v2", "v3"):
+            care.sql(
+                "insert into log_entry_revisions "
+                "(entry_id, patient_id, accion, motivo, kind, content, occurred_at) "
+                "values (%s, %s, 'editar', 'corrección', 'nota', %s, now())",
+                (eid, pid, texto),
+            )
+
+        fila = care.sql(
+            "select revisiones_count, ultima_revision_autor_id from log_entries_vigentes where id = %s",
+            (eid,),
+        )[0]
+        assert fila == (2, care.user_id)
+
+    def test_sin_revisiones_el_conteo_es_cero(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        eid = admin.sql(
+            "insert into log_entries (patient_id, kind, content, occurred_at) "
+            "values (%s, 'nota', 'sin cambios', now()) returning id",
+            (pid,),
+        )[0][0]
+        fila = admin.sql(
+            "select revisiones_count, ultima_revision_autor_id from log_entries_vigentes where id = %s",
+            (eid,),
+        )[0]
+        assert fila == (0, None)

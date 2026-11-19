@@ -1,12 +1,14 @@
-"""Resúmenes médicos: generación en segundo plano, reutilización y trazabilidad.
+"""Resúmenes médicos: generación en segundo plano, reutilización, trazabilidad,
+límites de contexto y medición de tiempos.
 
-La nota de trazabilidad la arma el código, no el LLM: aunque el modelo omita
-algo, el médico ve cuántas entradas se consideraron, cuáles se corrigieron
-(cuándo y por quién) y cuántas se anularon y quedaron fuera.
+La nota de trazabilidad la arma el código, no el LLM. Todos sus datos salen de
+UNA consulta a `log_entries_vigentes`; solo se consulta `profiles` para
+nombres, y solo si hubo correcciones.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -15,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import resumen
+from app.config import settings
 from app.deps import get_current_user, get_db, require_consent
 from app.main import app
 
@@ -40,6 +43,30 @@ def _fila(estado="generando", dias=30, creado_hace=timedelta(0), contenido=None)
         "contenido": contenido,
         "estado": estado,
         "created_at": hasta.isoformat(),
+    }
+
+
+def _entrada(
+    id_,
+    occurred_at,
+    kind,
+    content,
+    editada=False,
+    anulada=False,
+    revisiones=0,
+    ultima_at=None,
+    autor=None,
+):
+    return {
+        "id": id_,
+        "occurred_at": occurred_at,
+        "kind": kind,
+        "content": content,
+        "editada": editada,
+        "anulada": anulada,
+        "revisiones_count": revisiones,
+        "ultima_revision_at": ultima_at,
+        "ultima_revision_autor_id": autor,
     }
 
 
@@ -77,18 +104,18 @@ def ctx(monkeypatch):
 
 
 def _contenido_final(ctx) -> str:
-    """Contenido que la tarea en segundo plano escribió al completar."""
     return ctx.tablas["summaries"].update.call_args.args[0]["contenido"]
 
 
-def _preparar(ctx, entradas, anuladas=(), revisiones=(), perfiles=()):
+def _preparar(ctx, entradas, perfiles=()):
+    """Secuencia de la ruta: reutilización (vacía) -> insert -> consulta de
+    entradas -> [perfiles si hubo correcciones] -> update final."""
     ctx.tablas["summaries"] = _tabla(
-        _ej([]),  # no hay resumen reciente que reutilizar
-        _ej([_fila()]),  # insert en 'generando'
-        _ej([_fila(estado="listo", contenido="x")]),  # update al completar
+        _ej([]),
+        _ej([_fila()]),
+        _ej([_fila(estado="listo", contenido="x")]),
     )
-    ctx.tablas["log_entries_vigentes"] = _tabla(_ej(entradas), _ej(list(anuladas)))
-    ctx.tablas["log_entry_revisions"] = _tabla(_ej(list(revisiones)))
+    ctx.tablas["log_entries_vigentes"] = _tabla(_ej(entradas))
     ctx.tablas["profiles"] = _tabla(_ej(list(perfiles)))
 
 
@@ -96,46 +123,21 @@ def _preparar(ctx, entradas, anuladas=(), revisiones=(), perfiles=()):
 
 
 def test_post_responde_202_en_generando_y_completa_en_segundo_plano(ctx):
-    _preparar(
-        ctx,
-        entradas=[
-            {
-                "id": E1,
-                "occurred_at": "2026-10-12T17:30:00+00:00",
-                "kind": "medicamento",
-                "content": "Insulina 8 UI",
-                "editada": False,
-            }
-        ],
-        anuladas=[],
-    )
+    _preparar(ctx, [_entrada(E1, "2026-10-12T17:30:00+00:00", "medicamento", "Insulina 8 UI")])
 
     r = ctx.client.post(URL)
 
     assert r.status_code == 202
     assert r.json()["estado"] == "generando"
-    insertada = ctx.tablas["summaries"].insert.call_args.args[0]
-    assert insertada["estado"] == "generando"
-    assert insertada["contenido"] is None
-    # La tarea en segundo plano completó el resumen y lo marcó como listo.
+    assert ctx.tablas["summaries"].insert.call_args.args[0]["contenido"] is None
     actualizada = ctx.tablas["summaries"].update.call_args.args[0]
     assert actualizada["estado"] == "listo"
     assert actualizada["contenido"].startswith("Resumen de la IA.")
 
 
 def test_sin_correcciones_lo_declara_explicitamente(ctx):
-    _preparar(
-        ctx,
-        entradas=[
-            {
-                "id": E1,
-                "occurred_at": "2026-10-12T17:30:00+00:00",
-                "kind": "medicamento",
-                "content": "Insulina 8 UI",
-                "editada": False,
-            }
-        ],
-    )
+    _preparar(ctx, [_entrada(E1, "2026-10-12T17:30:00+00:00", "medicamento", "Insulina 8 UI")])
+
     ctx.client.post(URL)
 
     contenido = _contenido_final(ctx)
@@ -145,31 +147,27 @@ def test_sin_correcciones_lo_declara_explicitamente(ctx):
         in contenido
     )
     assert "No hubo correcciones ni anulaciones en el período." in contenido
+    # Sin correcciones no se consultan perfiles.
+    ctx.tablas["profiles"].select.assert_not_called()
 
 
-def test_lista_correcciones_con_autor_fecha_y_conteo_y_cuenta_anuladas(ctx):
+def test_lista_correcciones_con_autor_fecha_conteo_y_anuladas(ctx):
     _preparar(
         ctx,
-        entradas=[
-            {
-                "id": E1,
-                "occurred_at": "2026-10-12T17:30:00+00:00",
-                "kind": "medicamento",
-                "content": "Insulina 6 UI",
-                "editada": True,
-            },
-            {
-                "id": E2,
-                "occurred_at": "2026-10-11T12:00:00+00:00",
-                "kind": "nota",
-                "content": "Durmió bien",
-                "editada": False,
-            },
-        ],
-        anuladas=[{"id": "a1"}, {"id": "a2"}],
-        revisiones=[
-            {"entry_id": E1, "author_id": AUTORA, "created_at": "2026-10-12T19:05:00+00:00"},
-            {"entry_id": E1, "author_id": AUTORA, "created_at": "2026-10-12T18:00:00+00:00"},
+        [
+            _entrada(
+                E1,
+                "2026-10-12T17:30:00+00:00",
+                "medicamento",
+                "Insulina 6 UI",
+                editada=True,
+                revisiones=2,
+                ultima_at="2026-10-12T19:05:00+00:00",
+                autor=AUTORA,
+            ),
+            _entrada(E2, "2026-10-11T12:00:00+00:00", "nota", "Durmió bien"),
+            _entrada("a1", "2026-10-10T10:00:00+00:00", "nota", "x", anulada=True),
+            _entrada("a2", "2026-10-09T10:00:00+00:00", "nota", "y", anulada=True),
         ],
         perfiles=[{"id": AUTORA, "nombre": "Ana"}],
     )
@@ -181,31 +179,42 @@ def test_lista_correcciones_con_autor_fecha_y_conteo_y_cuenta_anuladas(ctx):
         "Entradas consideradas: 2 · Corregidas: 1 · Anuladas y excluidas del resumen: 2"
         in contenido
     )
-    # Hora de Chile (UTC-3): 17:30 UTC -> 14:30, última corrección 19:05 UTC -> 16:05.
+    # 17:30 UTC -> 14:30 Chile; última corrección 19:05 UTC -> 16:05.
     assert (
         "- Entrada del 12-10-2026 14:30 (medicamento): corregida el 12-10-2026 16:05 "
         "por Ana (2 correcciones)." in contenido
     )
-    # La IA recibe la versión vigente y sabe que fue corregida.
     assert "medicamento [corregida]: Insulina 6 UI" in ctx.llamadas[0]
+
+
+def test_anuladas_no_llegan_a_la_ia(ctx):
+    _preparar(
+        ctx,
+        [
+            _entrada(E1, "2026-10-12T17:30:00+00:00", "medicamento", "Dato válido"),
+            _entrada("a1", "2026-10-11T10:00:00+00:00", "nota", "REGISTRO ERRADO", anulada=True),
+        ],
+    )
+    ctx.client.post(URL)
+    assert "REGISTRO ERRADO" not in ctx.llamadas[0]
 
 
 def test_nota_no_expone_contenido_clinico_ni_motivos(ctx):
     _preparar(
         ctx,
-        entradas=[
-            {
-                "id": E1,
-                "occurred_at": "2026-10-12T17:30:00+00:00",
-                "kind": "medicamento",
-                "content": "Anticoagulante 5 mg",
-                "editada": True,
-            }
+        [
+            _entrada(
+                E1,
+                "2026-10-12T17:30:00+00:00",
+                "medicamento",
+                "Anticoagulante 5 mg",
+                editada=True,
+                revisiones=1,
+                ultima_at="2026-10-12T19:05:00+00:00",
+                autor=AUTORA,
+            )
         ],
-        revisiones=[
-            {"entry_id": E1, "author_id": AUTORA, "created_at": "2026-10-12T19:05:00+00:00"}
-        ],
-        perfiles=[],  # sin nombre registrado
+        perfiles=[],
     )
 
     ctx.client.post(URL)
@@ -213,7 +222,6 @@ def test_nota_no_expone_contenido_clinico_ni_motivos(ctx):
     nota = _contenido_final(ctx).split("---", 1)[1]
     assert "Anticoagulante" not in nota
     assert "por un miembro del grupo." in nota
-    ctx.tablas["log_entry_revisions"].select.assert_called_with("entry_id, author_id, created_at")
 
 
 def test_fallo_del_llm_marca_error_sin_contenido_y_no_loguea_el_texto(ctx, monkeypatch, caplog):
@@ -221,15 +229,102 @@ def test_fallo_del_llm_marca_error_sin_contenido_y_no_loguea_el_texto(ctx, monke
         raise RuntimeError("cuota agotada con Juan Pérez: texto clínico")
 
     monkeypatch.setattr(resumen, "ask_llm", llm_caido)
-    _preparar(ctx, entradas=[])
+    _preparar(ctx, [])
 
     r = ctx.client.post(URL)
 
-    assert r.status_code == 202  # la respuesta ya salió; el fallo queda en el resumen
-    actualizada = ctx.tablas["summaries"].update.call_args.args[0]
-    assert actualizada == {"estado": "error"}
+    assert r.status_code == 202
+    assert ctx.tablas["summaries"].update.call_args.args[0] == {"estado": "error"}
     assert "Juan Pérez" not in caplog.text
     assert "RuntimeError" in caplog.text
+
+
+# --- Una sola consulta -------------------------------------------------------
+
+
+def test_la_nota_sale_de_una_sola_consulta_a_la_vista(ctx):
+    _preparar(
+        ctx,
+        [
+            _entrada(
+                E1,
+                "2026-10-12T17:30:00+00:00",
+                "medicamento",
+                "x",
+                editada=True,
+                revisiones=3,
+                ultima_at="2026-10-12T19:05:00+00:00",
+                autor=AUTORA,
+            ),
+            _entrada("a1", "2026-10-11T10:00:00+00:00", "nota", "y", anulada=True),
+        ],
+        perfiles=[{"id": AUTORA, "nombre": "Ana"}],
+    )
+
+    ctx.client.post(URL)
+
+    # Una consulta para entradas (incluye anuladas) y ninguna a revisiones.
+    assert ctx.tablas["log_entries_vigentes"].select.call_count == 1
+    assert "log_entry_revisions" not in ctx.tablas  # nunca se consulta
+    assert "(3 correcciones)" in _contenido_final(ctx)
+
+
+# --- Límites de contexto ------------------------------------------------------
+
+
+def test_contexto_se_acota_a_las_entradas_mas_recientes(ctx, monkeypatch):
+    monkeypatch.setattr(settings, "resumen_max_entradas", 2)
+    _preparar(
+        ctx,
+        [
+            _entrada(E1, "2026-10-12T10:00:00+00:00", "nota", "reciente-1"),
+            _entrada(E2, "2026-10-11T10:00:00+00:00", "nota", "reciente-2"),
+            _entrada("e3", "2026-10-10T10:00:00+00:00", "nota", "antigua"),
+        ],
+    )
+
+    ctx.client.post(URL)
+
+    assert "reciente-1" in ctx.llamadas[0] and "reciente-2" in ctx.llamadas[0]
+    assert "antigua" not in ctx.llamadas[0]
+    assert "se generó con las 2 entradas más recientes de 3" in _contenido_final(ctx)
+
+
+def test_contexto_se_acota_por_caracteres(ctx, monkeypatch):
+    monkeypatch.setattr(settings, "resumen_max_caracteres", 120)
+    _preparar(
+        ctx,
+        [
+            _entrada(E1, "2026-10-12T10:00:00+00:00", "nota", "a" * 80),
+            _entrada(E2, "2026-10-11T10:00:00+00:00", "nota", "b" * 80),
+        ],
+    )
+
+    ctx.client.post(URL)
+
+    assert len(ctx.llamadas[0]) <= 120
+    assert "b" * 10 not in ctx.llamadas[0]
+
+
+def test_sin_truncar_no_se_menciona_el_limite(ctx):
+    _preparar(ctx, [_entrada(E1, "2026-10-12T10:00:00+00:00", "nota", "corta")])
+    ctx.client.post(URL)
+    assert "por límite de tamaño" not in _contenido_final(ctx)
+
+
+# --- Medición -----------------------------------------------------------------
+
+
+def test_mide_cada_etapa_sin_registrar_contenido(ctx, caplog):
+    caplog.set_level(logging.INFO, logger="resumen")
+    _preparar(ctx, [_entrada(E1, "2026-10-12T10:00:00+00:00", "nota", "texto clínico secreto")])
+
+    ctx.client.post(URL)
+
+    tiempos = [r.getMessage() for r in caplog.records if r.name == "resumen"]
+    for etapa in ("consulta", "llm", "nota"):
+        assert any(f"resumen_tiempo etapa={etapa} ms=" in m for m in tiempos), etapa
+    assert "texto clínico secreto" not in caplog.text
 
 
 # --- Reutilización ------------------------------------------------------------
@@ -263,12 +358,10 @@ def test_reusa_resumen_en_curso_reciente(ctx):
 def test_no_reusa_si_la_ventana_es_distinta(ctx):
     ctx.tablas["summaries"] = _tabla(
         _ej([_fila(estado="listo", dias=30, contenido="mensual", creado_hace=timedelta(hours=1))]),
-        _ej([_fila(dias=7)]),  # insert de una nueva de 7 días
+        _ej([_fila(dias=7)]),
         _ej([_fila(estado="listo", contenido="x")]),
     )
-    ctx.tablas["log_entries_vigentes"] = _tabla(_ej([]), _ej([]))
-    ctx.tablas["log_entry_revisions"] = _tabla()
-    ctx.tablas["profiles"] = _tabla()
+    ctx.tablas["log_entries_vigentes"] = _tabla(_ej([]))
 
     r = ctx.client.post(f"{URL}?dias=7")
 
@@ -277,12 +370,11 @@ def test_no_reusa_si_la_ventana_es_distinta(ctx):
 
 
 def test_forzar_ignora_el_resumen_reciente(ctx):
-    # Con forzar no hay consulta de reutilización: lo primero es el insert.
     ctx.tablas["summaries"] = _tabla(
-        _ej([_fila()]),  # insert
-        _ej([_fila(estado="listo", contenido="x")]),  # update
+        _ej([_fila()]),
+        _ej([_fila(estado="listo", contenido="x")]),
     )
-    ctx.tablas["log_entries_vigentes"] = _tabla(_ej([]), _ej([]))
+    ctx.tablas["log_entries_vigentes"] = _tabla(_ej([]))
 
     r = ctx.client.post(f"{URL}?forzar=true")
 
