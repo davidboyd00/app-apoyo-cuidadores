@@ -81,11 +81,12 @@ Cada bloque cubre las siete columnas del "registro" que exige la Ley 21.719
 - **Derechos:** acceso (`GET /patients/{id}/medications/{med_id}/doses` para miembros; el propio autor las verá al exportar sus datos si sumamos la tabla a `data-export` — **PENDIENTE PRODUCTO**). Rectificación no aplica (append-only): errores se corrigen registrando una dosis nueva con el status correcto. Supresión vía cascade del paciente o del medicamento.
 
 ### `summaries`
-- **Datos:** `contenido` (texto), `desde`, `hasta`.
+- **Datos:** `contenido` (texto), `desde`, `hasta`, `estado` (`generando`/`listo`/`error`), `author_id` (quien lo pidió; queda vacío si esa cuenta se elimina).
+- **Generación:** en segundo plano. Un resumen listo de las últimas 24 h con la misma ventana se reutiliza sin llamar al LLM, salvo `forzar=true`. Si la generación falla, el resumen queda en `error` y el log registra solo el tipo de error, nunca el texto.
 - **Trazabilidad:** `contenido` termina con una nota generada por el sistema (no por el LLM) con el número de entradas consideradas, corregidas y anuladas del período, y para cada corrección la fecha de la entrada, la fecha de la última corrección y el nombre de quien corrigió (`profiles.nombre`). No incluye el contenido clínico ni el motivo de las correcciones (minimización); esos quedan en el historial de la app.
 - **Base de licitud:** interés legítimo (documentación clínica derivada).
 - **Dónde vive:** Supabase.
-- **Quién accede:** miembros del grupo.
+- **Quién accede:** miembros del grupo. Completar un resumen (estado) solo lo puede hacer su autor (RLS `summaries_update`).
 - **Sale a terceros:** al generarse pasan por el LLM (contexto transitorio); no se persiste allá.
 - **Retención:** indefinida mientras exista el paciente. **PENDIENTE JURÍDICO**: definir plazo con legal — propuesta razonable es "vida del paciente en la plataforma".
 - **Derechos:** acceso, supresión vía cascade.

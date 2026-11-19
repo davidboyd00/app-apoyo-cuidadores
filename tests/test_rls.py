@@ -507,3 +507,67 @@ class TestReglasSagradas:
         )
         row = admin.sql("select cited_entry_ids from assistant_messages")[0][0]
         assert row == []  # default '{}'::uuid[]
+
+
+class TestResumenesAsincronos:
+    """Un resumen lo completa solo quien lo pidió, mientras siga siendo
+    admin o caregiver. La tarea en segundo plano corre con esa sesión."""
+
+    def test_autor_completa_su_resumen(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        rid = care.sql(
+            "insert into summaries (patient_id, desde, hasta, estado, contenido) "
+            "values (%s, now() - interval '30 days', now(), 'generando', null) returning id",
+            (pid,),
+        )[0][0]
+
+        care.sql("update summaries set estado = 'listo', contenido = 'ok' where id = %s", (rid,))
+
+        assert care.sql("select estado from summaries where id = %s", (rid,))[0][0] == "listo"
+
+    def test_otro_caregiver_no_completa_el_resumen_ajeno(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care_a = make_user("cA@test.cl")
+        care_b = make_user("cB@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care_a.user_id, "caregiver")
+        add_member(pid, care_b.user_id, "caregiver")
+        rid = care_a.sql(
+            "insert into summaries (patient_id, desde, hasta, estado) "
+            "values (%s, now() - interval '30 days', now(), 'generando') returning id",
+            (pid,),
+        )[0][0]
+
+        care_b.sql(
+            "update summaries set estado = 'listo', contenido = 'hack' where id = %s", (rid,)
+        )
+
+        assert care_a.sql("select estado, contenido from summaries where id = %s", (rid,))[0] == (
+            "generando",
+            None,
+        )
+
+    def test_resumen_listo_exige_contenido(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        with pytest.raises(psycopg.errors.CheckViolation):
+            admin.sql(
+                "insert into summaries (patient_id, desde, hasta, estado, contenido) "
+                "values (%s, now() - interval '1 day', now(), 'listo', null)",
+                (pid,),
+            )
+
+    def test_autor_queda_registrado_por_defecto(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        rid = admin.sql(
+            "insert into summaries (patient_id, desde, hasta, estado) "
+            "values (%s, now() - interval '1 day', now(), 'generando') returning id",
+            (pid,),
+        )[0][0]
+        assert str(admin.sql("select author_id from summaries where id = %s", (rid,))[0][0]) == str(
+            admin.user_id
+        )

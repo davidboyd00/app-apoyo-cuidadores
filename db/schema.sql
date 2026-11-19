@@ -181,14 +181,25 @@ create index if not exists medication_doses_patient_sched_idx
 create index if not exists medication_doses_med_sched_idx
   on medication_doses (medication_id, scheduled_for);
 
+-- Resúmenes médicos. Se generan en segundo plano: 'generando' -> 'listo' | 'error'.
+-- El contenido solo es obligatorio cuando el resumen está listo.
 create table if not exists summaries (
   id          uuid primary key default gen_random_uuid(),
   patient_id  uuid not null references patients(id) on delete cascade,
   desde       timestamptz not null,
   hasta       timestamptz not null,
-  contenido   text not null,
-  created_at  timestamptz not null default now()
+  contenido   text,
+  estado      text not null default 'listo' check (estado in ('generando', 'listo', 'error')),
+  author_id   uuid references auth.users(id) on delete set null default auth.uid(),
+  created_at  timestamptz not null default now(),
+  constraint summaries_contenido_listo_ck check (estado <> 'listo' or contenido is not null)
 );
+-- Migración in-place (bases creadas antes del estado asíncrono).
+alter table summaries add column if not exists estado text not null default 'listo';
+alter table summaries alter column contenido drop not null;
+alter table summaries add column if not exists author_id uuid
+  references auth.users(id) on delete set null;
+alter table summaries alter column author_id set default auth.uid();
 
 create table if not exists assistant_messages (
   id                uuid primary key default gen_random_uuid(),
@@ -420,6 +431,14 @@ create policy summaries_select on summaries
 drop policy if exists summaries_insert on summaries;
 create policy summaries_insert on summaries
   for insert with check (has_role(patient_id, 'admin') or has_role(patient_id, 'caregiver'));
+
+-- Completar o marcar con error solo el autor que lo pidió (la tarea en segundo
+-- plano corre con su sesión), y solo si sigue siendo admin/caregiver.
+drop policy if exists summaries_update on summaries;
+create policy summaries_update on summaries
+  for update
+  using (author_id = auth.uid() and (has_role(patient_id, 'admin') or has_role(patient_id, 'caregiver')))
+  with check (author_id = auth.uid() and (has_role(patient_id, 'admin') or has_role(patient_id, 'caregiver')));
 
 -- assistant_messages: leer si soy miembro; escribir admin/caregiver.
 drop policy if exists asst_select on assistant_messages;
@@ -850,6 +869,19 @@ begin
 exception
   when duplicate_object then
     raise notice 'Realtime: log_entries ya estaba en supabase_realtime (sin cambios).';
+  when undefined_object then
+    raise notice 'Realtime: no existe la publicación supabase_realtime (fuera de Supabase); se omite.';
+end
+$$;
+
+-- Los resúmenes también avisan en tiempo real cuando quedan listos o con error.
+do $$
+begin
+  alter publication supabase_realtime add table public.summaries;
+  raise notice 'Realtime: summaries agregada a supabase_realtime.';
+exception
+  when duplicate_object then
+    raise notice 'Realtime: summaries ya estaba en supabase_realtime (sin cambios).';
   when undefined_object then
     raise notice 'Realtime: no existe la publicación supabase_realtime (fuera de Supabase); se omite.';
 end

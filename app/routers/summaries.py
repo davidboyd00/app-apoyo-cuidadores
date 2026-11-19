@@ -1,126 +1,65 @@
+import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from supabase import Client
 
 from ..deps import get_current_user, get_db
-from ..llm import ask_llm
+from ..resumen import construir_resumen
 from ..schemas import Summary
 
 router = APIRouter(prefix="/patients/{patient_id}/summaries", tags=["summaries"])
+log = logging.getLogger(__name__)
+
+# Un resumen listo dentro de esta ventana se reutiliza en vez de llamar al LLM.
+VENTANA_REUSO = timedelta(hours=24)
+# Un resumen 'generando' más viejo que esto se considera abandonado (la tarea
+# murió con el proceso) y no bloquea uno nuevo.
+VENTANA_GENERANDO = timedelta(minutes=10)
 
 
-PROMPT_RESUMEN = (
-    "Genera un resumen médico breve (máx. 8 líneas) apto para consulta médica, "
-    "priorizando cambios de síntomas, adherencia a medicamentos y eventos "
-    "relevantes. Basa el resumen EXCLUSIVAMENTE en las entradas provistas. "
-    "Las entradas marcadas [corregida] fueron corregidas por la familia: usa "
-    "su versión vigente, que es la que se te entrega."
-)
-
-# Máximo de correcciones listadas una a una en la nota (el resto se resume).
-MAX_CORRECCIONES_LISTADAS = 15
-
-try:
-    _ZONA = ZoneInfo("America/Santiago")
-except ZoneInfoNotFoundError:  # sin tzdata en el sistema: se informa en UTC
-    _ZONA = UTC
-
-
-def _fecha(valor: str | datetime) -> str:
-    dt = datetime.fromisoformat(valor) if isinstance(valor, str) else valor
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt.astimezone(_ZONA).strftime("%d-%m-%Y %H:%M")
-
-
-def _nota_trazabilidad(
-    db: Client,
-    patient_id: UUID,
-    desde: datetime,
-    hasta: datetime,
-    entradas: list[dict],
-) -> str:
-    """Nota determinista (la arma el código, no el LLM) que da validez
-    probatoria al resumen: cuántas entradas se consideraron, cuáles fueron
-    corregidas (cuándo y por quién) y cuántas se anularon y quedaron fuera.
-
-    Minimización (Ley 21.719): no repite contenido clínico ni el motivo de las
-    correcciones; esos detalles quedan en el historial dentro de la app.
-    """
-    anuladas = (
-        db.table("log_entries_vigentes")
-        .select("id")
+def _reusable(db: Client, patient_id: UUID, dias: int, ahora: datetime) -> dict | None:
+    """Resumen listo reciente con la misma ventana, o en curso hace poco."""
+    candidatos = (
+        db.table("summaries")
+        .select("*")
         .eq("patient_id", str(patient_id))
-        .eq("anulada", True)
-        .gte("occurred_at", desde.isoformat())
-        .lte("occurred_at", hasta.isoformat())
+        .gte("created_at", (ahora - VENTANA_REUSO).isoformat())
+        .order("created_at", desc=True)
+        .limit(10)
         .execute()
         .data
     )
-    editadas = [e for e in entradas if e.get("editada")]
+    for s in candidatos:
+        desde = datetime.fromisoformat(s["desde"])
+        hasta = datetime.fromisoformat(s["hasta"])
+        misma_ventana = abs((hasta - desde).total_seconds() - dias * 86400) < 60
+        if not misma_ventana:
+            continue
+        if s["estado"] == "listo":
+            return s
+        if (
+            s["estado"] == "generando"
+            and datetime.fromisoformat(s["created_at"]) >= ahora - VENTANA_GENERANDO
+        ):
+            return s
+    return None
 
-    lineas = [
-        "---",
-        "Trazabilidad del registro (generada por el sistema, no por IA)",
-        f"Período: {_fecha(desde)} a {_fecha(hasta)}",
-        (
-            f"Entradas consideradas: {len(entradas)} · Corregidas: {len(editadas)} · "
-            f"Anuladas y excluidas del resumen: {len(anuladas)}"
-        ),
-    ]
 
-    if not editadas and not anuladas:
-        lineas.append("No hubo correcciones ni anulaciones en el período.")
-        return "\n".join(lineas)
-
-    if editadas:
-        revisiones = (
-            db.table("log_entry_revisions")
-            .select("entry_id, author_id, created_at")
-            .in_("entry_id", [e["id"] for e in editadas])
-            .eq("accion", "editar")
-            .order("created_at", desc=True)
-            .execute()
-            .data
-        )
-        # Última corrección y número de correcciones por entrada.
-        ultima: dict[str, dict] = {}
-        conteo: dict[str, int] = {}
-        for r in revisiones:
-            ultima.setdefault(r["entry_id"], r)
-            conteo[r["entry_id"]] = conteo.get(r["entry_id"], 0) + 1
-
-        autores = list({r["author_id"] for r in ultima.values()})
-        perfiles = (
-            db.table("profiles").select("id, nombre").in_("id", autores).execute().data
-            if autores
-            else []
-        )
-        nombres = {p["id"]: p["nombre"] for p in perfiles if p.get("nombre")}
-
-        lineas.append("Correcciones:")
-        for e in editadas[:MAX_CORRECCIONES_LISTADAS]:
-            r = ultima.get(e["id"])
-            if r is None:
-                continue
-            quien = nombres.get(r["author_id"], "un miembro del grupo")
-            veces = conteo[e["id"]]
-            extra = f" ({veces} correcciones)" if veces > 1 else ""
-            lineas.append(
-                f"- Entrada del {_fecha(e['occurred_at'])} ({e['kind']}): "
-                f"corregida el {_fecha(r['created_at'])} por {quien}{extra}."
-            )
-        if len(editadas) > MAX_CORRECCIONES_LISTADAS:
-            lineas.append(f"- … y {len(editadas) - MAX_CORRECCIONES_LISTADAS} más.")
-
-    lineas.append(
-        "La versión original, el autor, la hora y el motivo de cada corrección "
-        "o anulación están disponibles en el historial de la aplicación."
-    )
-    return "\n".join(lineas)
+async def _completar(
+    db: Client, summary_id: str, patient_id: UUID, desde: datetime, hasta: datetime
+) -> None:
+    """Corre después de responder 202. Nunca registra contenido clínico: solo
+    el tipo de error, para diagnóstico."""
+    try:
+        contenido = await construir_resumen(db, patient_id, desde, hasta)
+        db.table("summaries").update({"contenido": contenido, "estado": "listo"}).eq(
+            "id", summary_id
+        ).execute()
+    except Exception as exc:  # noqa: BLE001 - cualquier fallo debe quedar marcado, no perderse
+        log.error("resumen %s falló: %s", summary_id, type(exc).__name__)
+        db.table("summaries").update({"estado": "error"}).eq("id", summary_id).execute()
 
 
 @router.get("", response_model=list[Summary])
@@ -135,45 +74,68 @@ def listar(patient_id: UUID, db: Client = Depends(get_db), user=Depends(get_curr
     )
 
 
-@router.post("", response_model=Summary, status_code=201)
-async def generar(
+@router.get("/{summary_id}", response_model=Summary)
+def obtener(
     patient_id: UUID,
-    dias: int = 30,
+    summary_id: UUID,
     db: Client = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    hasta = datetime.now(UTC)
-    desde = hasta - timedelta(days=dias)
-    # Solo entradas vigentes: una anulada (registrada por error) no entra al
-    # resumen que lee el médico tratante.
-    entradas = (
-        db.table("log_entries_vigentes")
-        .select("id, occurred_at, kind, content, editada")
+    """Estado de un resumen. La app consulta aquí si no usa Realtime."""
+    res = (
+        db.table("summaries")
+        .select("*")
+        .eq("id", str(summary_id))
         .eq("patient_id", str(patient_id))
-        .eq("anulada", False)
-        .gte("occurred_at", desde.isoformat())
-        .lte("occurred_at", hasta.isoformat())
-        .order("occurred_at", desc=True)
+        .limit(1)
         .execute()
         .data
     )
-    contexto = "\n".join(
-        f"{e['occurred_at']} · {e['kind']}{' [corregida]' if e.get('editada') else ''}: "
-        f"{e['content']}"
-        for e in entradas
-    )
-    texto_ia = await ask_llm(contexto, PROMPT_RESUMEN)
-    contenido = f"{texto_ia}\n\n{_nota_trazabilidad(db, patient_id, desde, hasta, entradas)}"
-    res = (
+    if not res:
+        raise HTTPException(404, "Resumen no encontrado o sin permisos para verlo")
+    return res[0]
+
+
+@router.post("", response_model=Summary, status_code=202)
+def generar(
+    patient_id: UUID,
+    background: BackgroundTasks,
+    response: Response,
+    dias: int = Query(30, ge=1, le=90),
+    forzar: bool = Query(False, description="Ignora un resumen reciente y genera uno nuevo."),
+    db: Client = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Pide un resumen médico.
+
+    - Si hay un resumen listo de las últimas 24 h con la misma ventana, lo
+      devuelve al instante con status 200 (no llama al LLM).
+    - Si ya hay uno en curso, devuelve ese con status 200.
+    - Si no, crea el resumen en estado `generando` y lo completa en segundo
+      plano: responde 202. La app se entera por Realtime o consultando
+      `GET /summaries/{id}`.
+    """
+    ahora = datetime.now(UTC)
+    if not forzar:
+        existente = _reusable(db, patient_id, dias, ahora)
+        if existente is not None:
+            response.status_code = 200
+            return existente
+
+    desde = ahora - timedelta(days=dias)
+    fila = (
         db.table("summaries")
         .insert(
             {
                 "patient_id": str(patient_id),
                 "desde": desde.isoformat(),
-                "hasta": hasta.isoformat(),
-                "contenido": contenido,
+                "hasta": ahora.isoformat(),
+                "estado": "generando",
+                "contenido": None,
             }
         )
         .execute()
+        .data[0]
     )
-    return res.data[0]
+    background.add_task(_completar, db, fila["id"], patient_id, desde, ahora)
+    return fila

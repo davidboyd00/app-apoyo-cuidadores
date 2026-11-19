@@ -273,7 +273,9 @@ class Summary(BaseModel):
     patient_id: UUID
     desde: datetime
     hasta: datetime
-    contenido: str
+    # Null mientras el resumen se genera (estado 'generando') o si falló.
+    contenido: str | None = None
+    estado: Literal["generando", "listo", "error"] = "listo"
     created_at: datetime
 
 

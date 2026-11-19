@@ -1959,6 +1959,7 @@
           "summaries"
         ],
         "summary": "Generar",
+        "description": "Pide un resumen médico.\n\n- Si hay un resumen listo de las últimas 24 h con la misma ventana, lo\n  devuelve al instante con status 200 (no llama al LLM).\n- Si ya hay uno en curso, devuelve ese con status 200.\n- Si no, crea el resumen en estado `generando` y lo completa en segundo\n  plano: responde 202. La app se entera por Realtime o consultando\n  `GET /summaries/{id}`.",
         "operationId": "generar_patients__patient_id__summaries_post",
         "parameters": [
           {
@@ -1977,8 +1978,92 @@
             "required": false,
             "schema": {
               "type": "integer",
+              "maximum": 90,
+              "minimum": 1,
               "default": 30,
               "title": "Dias"
+            }
+          },
+          {
+            "name": "forzar",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Ignora un resumen reciente y genera uno nuevo.",
+              "default": false,
+              "title": "Forzar"
+            },
+            "description": "Ignora un resumen reciente y genera uno nuevo."
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Summary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/patients/{patient_id}/summaries/{summary_id}": {
+      "get": {
+        "tags": [
+          "summaries"
+        ],
+        "summary": "Obtener",
+        "description": "Estado de un resumen. La app consulta aquí si no usa Realtime.",
+        "operationId": "obtener_patients__patient_id__summaries__summary_id__get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "summary_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Summary Id"
             }
           },
           {
@@ -1999,7 +2084,7 @@
           }
         ],
         "responses": {
-          "201": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -4099,8 +4184,25 @@
             "title": "Hasta"
           },
           "contenido": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Contenido"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "generando",
+              "listo",
+              "error"
+            ],
+            "title": "Estado",
+            "default": "listo"
           },
           "created_at": {
             "type": "string",
@@ -4114,7 +4216,6 @@
           "patient_id",
           "desde",
           "hasta",
-          "contenido",
           "created_at"
         ],
         "title": "Summary"
