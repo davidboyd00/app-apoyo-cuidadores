@@ -1,0 +1,28 @@
+name: Resumen diario por paciente
+
+on:
+  schedule:
+    # Todos los días, 06:00 UTC (03:00 en Chile continental, UTC-3 en horario de verano).
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}  # permite lanzar manualmente desde la UI de GH
+
+jobs:
+  resumir:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Ejecutar resumen_diario.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LLM_PROVIDER: gemini
+          RESUMEN_PAUSA_SEG: "5"
+        run: python scripts/resumen_diario.py
