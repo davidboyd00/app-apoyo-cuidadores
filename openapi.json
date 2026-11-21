@@ -609,6 +609,76 @@
         }
       }
     },
+    "/patients/{patient_id}/entries/{entry_id}/historial": {
+      "get": {
+        "tags": [
+          "entries"
+        ],
+        "summary": "Historial",
+        "description": "Historial para la familia: la versión original tal como se escribió\n(la fila de `log_entries` nunca cambia) y cada corrección o anulación con\nsu autor, hora y motivo. Es lo que promete la nota de trazabilidad de los\nresúmenes. RLS limita a los miembros del grupo.",
+        "operationId": "historial_patients__patient_id__entries__entry_id__historial_get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entry Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntryHistorial"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/patients/{patient_id}/entries/{entry_id}/anulacion": {
       "post": {
         "tags": [
@@ -2205,6 +2275,104 @@
         }
       }
     },
+    "/patients/{patient_id}/metrics/asistente": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Asistente Verificable",
+        "description": "KPI del asistente (>90% de respuestas verificables).\n\nVerificable = cita al menos una entrada de la bitácora, o declara que la\nbitácora no alcanza (`suficiente=false`): en ambos casos la familia puede\ncomprobar la respuesta contra lo registrado. Solo lee ids y flags, nunca\nel texto de preguntas ni respuestas. RLS filtra por membresía.",
+        "operationId": "asistente_verificable_patients__patient_id__metrics_asistente_get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO 8601; default = hace 30 días",
+              "title": "Desde"
+            },
+            "description": "ISO 8601; default = hace 30 días"
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO 8601; default = ahora",
+              "title": "Hasta"
+            },
+            "description": "ISO 8601; default = ahora"
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AsistenteMetric"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/patients/{patient_id}/audit": {
       "get": {
         "tags": [
@@ -2284,6 +2452,238 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/patients/{patient_id}/turnos": {
+      "get": {
+        "tags": [
+          "turnos"
+        ],
+        "summary": "Listar",
+        "description": "Turnos que se cruzan con la ventana [desde, hasta], por hora de inicio.",
+        "operationId": "listar_patients__patient_id__turnos_get",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "desde",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO 8601; default = hace 1 día",
+              "title": "Desde"
+            },
+            "description": "ISO 8601; default = hace 1 día"
+          },
+          {
+            "name": "hasta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO 8601; default = en 14 días",
+              "title": "Hasta"
+            },
+            "description": "ISO 8601; default = en 14 días"
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Turno"
+                  },
+                  "title": "Response Listar Patients  Patient Id  Turnos Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "turnos"
+        ],
+        "summary": "Crear",
+        "description": "Agenda un turno. Sin `cuidador_id`, el turno es de quien lo crea.",
+        "operationId": "crear_patients__patient_id__turnos_post",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TurnoCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Turno"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/patients/{patient_id}/turnos/{turno_id}": {
+      "delete": {
+        "tags": [
+          "turnos"
+        ],
+        "summary": "Eliminar",
+        "operationId": "eliminar_patients__patient_id__turnos__turno_id__delete",
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "turno_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Turno Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -2783,6 +3183,39 @@
         "title": "AdherenceReport",
         "description": "Adherencia calculada sobre dosis registradas en el rango. No proyecta\ndosis esperadas: si la familia no registró, no cuenta como omisión."
       },
+      "AsistenteMetric": {
+        "properties": {
+          "ventana": {
+            "$ref": "#/components/schemas/VentanaTemporal"
+          },
+          "total_respuestas": {
+            "type": "integer",
+            "title": "Total Respuestas"
+          },
+          "verificables": {
+            "type": "integer",
+            "title": "Verificables"
+          },
+          "porcentaje_verificable": {
+            "type": "number",
+            "title": "Porcentaje Verificable"
+          },
+          "cumple_kpi": {
+            "type": "boolean",
+            "title": "Cumple Kpi"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ventana",
+          "total_respuestas",
+          "verificables",
+          "porcentaje_verificable",
+          "cumple_kpi"
+        ],
+        "title": "AsistenteMetric",
+        "description": "Respuestas verificables del asistente (KPI comprometido: >90%).\n\nUna respuesta es verificable si cita al menos una entrada de la bitácora\no si declara que la bitácora no alcanza para responder (`suficiente=false`)."
+      },
       "AssistantAnswer": {
         "properties": {
           "respuesta": {
@@ -2801,6 +3234,11 @@
             "type": "string",
             "format": "uuid",
             "title": "Conversation Id"
+          },
+          "suficiente": {
+            "type": "boolean",
+            "title": "Suficiente",
+            "default": true
           }
         },
         "type": "object",
@@ -2848,6 +3286,17 @@
             },
             "type": "array",
             "title": "Cited Entry Ids"
+          },
+          "suficiente": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suficiente"
           },
           "created_at": {
             "type": "string",
@@ -3221,6 +3670,13 @@
             },
             "type": "array",
             "title": "Pacientes Creados"
+          },
+          "turnos": {
+            "items": {
+              "$ref": "#/components/schemas/Turno"
+            },
+            "type": "array",
+            "title": "Turnos"
           }
         },
         "type": "object",
@@ -3417,6 +3873,105 @@
           "occurred_at"
         ],
         "title": "EntryCreate"
+      },
+      "EntryHistorial": {
+        "properties": {
+          "original": {
+            "$ref": "#/components/schemas/EntryOriginal"
+          },
+          "revisiones": {
+            "items": {
+              "$ref": "#/components/schemas/EntryRevision"
+            },
+            "type": "array",
+            "title": "Revisiones"
+          }
+        },
+        "type": "object",
+        "required": [
+          "original",
+          "revisiones"
+        ],
+        "title": "EntryHistorial",
+        "description": "Original + revisiones y anulación en orden cronológico."
+      },
+      "EntryOriginal": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "patient_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Patient Id"
+          },
+          "author_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Author Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "nota",
+              "medicamento",
+              "sintoma",
+              "animo",
+              "otro",
+              "alimentacion",
+              "ejercicio"
+            ],
+            "title": "Kind"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Occurred At"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "text",
+              "voice"
+            ],
+            "title": "Source",
+            "default": "text"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "registrado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registrado En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "patient_id",
+          "author_id",
+          "kind",
+          "content",
+          "occurred_at",
+          "created_at"
+        ],
+        "title": "EntryOriginal"
       },
       "EntryRevision": {
         "properties": {
@@ -4219,6 +4774,95 @@
           "created_at"
         ],
         "title": "Summary"
+      },
+      "Turno": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "patient_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Patient Id"
+          },
+          "cuidador_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cuidador Id"
+          },
+          "inicio": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Inicio"
+          },
+          "fin": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Fin"
+          },
+          "creado_por": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creado Por"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "patient_id",
+          "cuidador_id",
+          "inicio",
+          "fin",
+          "created_at"
+        ],
+        "title": "Turno"
+      },
+      "TurnoCreate": {
+        "properties": {
+          "cuidador_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cuidador Id"
+          },
+          "inicio": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Inicio"
+          },
+          "fin": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Fin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "inicio",
+          "fin"
+        ],
+        "title": "TurnoCreate",
+        "description": "Turno de cuidado. Sin `cuidador_id`, el turno es de quien lo crea."
       },
       "UpcomingDose": {
         "properties": {

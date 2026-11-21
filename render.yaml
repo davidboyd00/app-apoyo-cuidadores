@@ -40,8 +40,14 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      # Modelo vigente con capa gratuita (nov 2026). Google retira modelos:
+      # si deja de existir, se cambia solo esta variable (sin deploy de código).
+      - key: GEMINI_MODEL
+        value: gemini-3.6-flash
+      - key: GEMINI_THINKING_LEVEL
+        value: low
       - key: LLM_MAX_TOKENS
-        value: "512"
+        value: "1024"
 
       # ---- Ley 21.719 ----
       - key: POLICY_VERSION

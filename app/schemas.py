@@ -123,6 +123,27 @@ class EntryRevision(BaseModel):
     created_at: datetime
 
 
+# Versión original de una entrada, tal como se escribió (la fila de
+# log_entries nunca cambia). Base del historial que ve la familia.
+class EntryOriginal(BaseModel):
+    id: UUID
+    patient_id: UUID
+    author_id: UUID
+    kind: EntryKind
+    content: str
+    occurred_at: datetime
+    source: EntrySource = "text"
+    created_at: datetime
+    registrado_en: datetime | None = None
+
+
+class EntryHistorial(BaseModel):
+    """Original + revisiones y anulación en orden cronológico."""
+
+    original: EntryOriginal
+    revisiones: list[EntryRevision]
+
+
 # Respuesta: sin las restricciones de entrada, para no fallar con filas
 # históricas (p. ej. content vacío guardado antes de esta validación).
 # `anulada`/`editada` vienen de la vista log_entries_vigentes; son None cuando
@@ -240,8 +261,12 @@ class AssistantQuery(BaseModel):
 
 class AssistantAnswer(BaseModel):
     respuesta: str
+    # Entradas en que se basa la respuesta, validadas contra el contexto que
+    # vio el modelo (un id inventado nunca llega acá).
     cited_entry_ids: list[UUID]
     conversation_id: UUID
+    # False cuando la bitácora no alcanza para responder (el asistente lo dice).
+    suficiente: bool = True
 
 
 class AssistantMessage(BaseModel):
@@ -252,6 +277,8 @@ class AssistantMessage(BaseModel):
     pregunta: str
     respuesta: str
     cited_entry_ids: list[UUID]
+    # None en mensajes anteriores a la salida estructurada.
+    suficiente: bool | None = None
     created_at: datetime
 
 
@@ -296,6 +323,20 @@ class RelevoMetric(BaseModel):
     cumple_kpi: bool  # True si autores_distintos >= 2
 
 
+class AsistenteMetric(BaseModel):
+    """Respuestas verificables del asistente (KPI comprometido: >90%).
+
+    Una respuesta es verificable si cita al menos una entrada de la bitácora
+    o si declara que la bitácora no alcanza para responder (`suficiente=false`).
+    """
+
+    ventana: VentanaTemporal
+    total_respuestas: int
+    verificables: int
+    porcentaje_verificable: float
+    cumple_kpi: bool  # True si porcentaje_verificable >= 90
+
+
 # --- Derechos ARCO (Ley 21.719) ---
 
 
@@ -319,6 +360,8 @@ class DataExport(BaseModel):
     revisiones_bitacora: list[EntryRevision]
     mensajes_asistente: list[AssistantMessage]
     pacientes_creados: list[Patient]
+    # Turnos de cuidado en que el usuario es la persona a cargo.
+    turnos: list["Turno"] = Field(default_factory=list)
 
 
 # --- Centros / farmacias (tablas públicas pobladas por scrapers) ---
@@ -332,6 +375,40 @@ class Center(BaseModel):
     comuna: str | None = None
     direccion: str | None = None
     telefono: str | None = None
+
+
+# --- Turnos de cuidado (relevo familiar, EDT 2.1.1 / 2.2.2) ---
+
+DURACION_MAXIMA_TURNO = timedelta(days=7)
+
+
+class TurnoCreate(BaseModel):
+    """Turno de cuidado. Sin `cuidador_id`, el turno es de quien lo crea."""
+
+    cuidador_id: UUID | None = None
+    inicio: AwareDatetime
+    fin: AwareDatetime
+
+    @field_validator("fin")
+    @classmethod
+    def _fin_despues_de_inicio(cls, fin: datetime, info) -> datetime:
+        inicio = info.data.get("inicio")
+        if inicio is not None:
+            if fin <= inicio:
+                raise ValueError("El turno debe terminar después de empezar")
+            if fin - inicio > DURACION_MAXIMA_TURNO:
+                raise ValueError("Un turno no puede durar más de 7 días")
+        return fin
+
+
+class Turno(BaseModel):
+    id: UUID
+    patient_id: UUID
+    cuidador_id: UUID
+    inicio: datetime
+    fin: datetime
+    creado_por: UUID | None = None
+    created_at: datetime
 
 
 # --- Perfiles de cuidadores ---
@@ -369,3 +446,7 @@ class CareMember(BaseModel):
 class MemberInvite(BaseModel):
     email: str
     role: CareRole = "caregiver"
+
+
+# `DataExport` referencia a `Turno`, definido más abajo en el módulo.
+DataExport.model_rebuild()

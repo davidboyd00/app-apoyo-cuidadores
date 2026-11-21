@@ -5,7 +5,10 @@
 -- Idempotente. Las columnas nuevas van al final (CREATE OR REPLACE VIEW no
 -- permite reordenar las existentes). Requiere PostgreSQL 15+.
 
-create or replace view log_entries_vigentes with (security_invoker = true) as
+-- drop + create: deja la vista exactamente con estas columnas aunque se corra
+-- varias veces o en otro orden. El grant se repite abajo.
+drop view if exists log_entries_vigentes;
+create view log_entries_vigentes with (security_invoker = true) as
 select
   e.id,
   e.patient_id,

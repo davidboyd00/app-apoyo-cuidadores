@@ -54,7 +54,11 @@ create index if not exists log_entry_revisions_patient_idx
 
 -- Estado vigente de cada entrada. security_invoker = true: la vista aplica la
 -- RLS del usuario que consulta (miembros ven el historial; nadie ve filas ajenas).
-create or replace view log_entries_vigentes with (security_invoker = true) as
+-- drop + create (no solo `create or replace`): si el paquete se corre de nuevo
+-- después de 20261118_vista_trazabilidad, la vista ya tiene más columnas y
+-- Postgres no permite quitarlas con `create or replace`. El grant se repite abajo.
+drop view if exists log_entries_vigentes;
+create view log_entries_vigentes with (security_invoker = true) as
 select
   e.id,
   e.patient_id,

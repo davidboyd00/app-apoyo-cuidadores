@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -6,7 +7,7 @@ from supabase import Client
 
 from ..audit import registrar
 from ..deps import get_current_user, get_db
-from ..llm import ask_llm
+from ..llm import RespuestaAsistente, ask_llm_citado
 from ..schemas import (
     AssistantAnswer,
     AssistantMessage,
@@ -15,6 +16,23 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/patients/{patient_id}/assistant", tags=["assistant"])
+log = logging.getLogger(__name__)
+
+MSG_NO_DISPONIBLE = (
+    "El asistente no está disponible en este momento. Intenta de nuevo en unos minutos; "
+    "la bitácora sigue funcionando."
+)
+
+
+def _sin_registros(ventana_dias: int) -> RespuestaAsistente:
+    """Respuesta determinista cuando no hay entradas: no se llama al LLM."""
+    return RespuestaAsistente(
+        respuesta=(
+            f"No hay registros en la bitácora de los últimos {ventana_dias} días, así que no "
+            "puedo responder con datos. Prueba ampliando el período o registra lo que observes."
+        ),
+        suficiente=False,
+    )
 
 
 def _armar_contexto(entradas: list[dict]) -> str:
@@ -45,9 +63,18 @@ async def preguntar(
         .execute()
         .data
     )
-    contexto = _armar_contexto(entradas)
-    respuesta = await ask_llm(contexto, payload.pregunta)
-    cited = [e["id"] for e in entradas]
+    vistos = [e["id"] for e in entradas]
+    if entradas:
+        try:
+            resultado = await ask_llm_citado(
+                _armar_contexto(entradas), payload.pregunta, set(vistos)
+            )
+        except Exception as exc:  # noqa: BLE001 - se informa sin contenido clínico
+            log.error("asistente falló: %s", type(exc).__name__)
+            raise HTTPException(503, MSG_NO_DISPONIBLE) from exc
+    else:
+        resultado = _sin_registros(payload.ventana_dias)
+    cited = resultado.citas
     # Continúa conversación existente o inicia una nueva. La API elige el id
     # cuando no viene (en vez de dejar el default de la BD) para poder
     # devolverlo al cliente sin un roundtrip extra.
@@ -60,8 +87,11 @@ async def preguntar(
                 "patient_id": str(patient_id),
                 "conversation_id": str(conv_id),
                 "pregunta": payload.pregunta,
-                "respuesta": respuesta,
+                "respuesta": resultado.respuesta,
+                # Regla sagrada #4: qué entradas citó (validadas) y cuáles vio.
                 "cited_entry_ids": cited,
+                "contexto_entry_ids": vistos,
+                "suficiente": resultado.suficiente,
             }
         )
         .execute()
@@ -76,11 +106,20 @@ async def preguntar(
         patient_id=patient_id,
         metadata={
             "cited_count": len(cited),
+            "contexto_count": len(vistos),
+            "citas_descartadas": resultado.descartadas,
+            "formato_valido": resultado.formato_valido,
+            "suficiente": resultado.suficiente,
             "ventana_dias": payload.ventana_dias,
             "conversation_id": str(conv_id),
         },
     )
-    return AssistantAnswer(respuesta=respuesta, cited_entry_ids=cited, conversation_id=conv_id)
+    return AssistantAnswer(
+        respuesta=resultado.respuesta,
+        cited_entry_ids=cited,
+        conversation_id=conv_id,
+        suficiente=resultado.suficiente,
+    )
 
 
 @router.get("/messages", response_model=list[AssistantMessage])

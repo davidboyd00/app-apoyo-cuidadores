@@ -17,6 +17,7 @@ from .routers import (
     metrics,
     patients,
     summaries,
+    turnos,
 )
 
 log = logging.getLogger("caregivers")
@@ -56,6 +57,7 @@ app.include_router(assistant.router, dependencies=_needs_consent)
 app.include_router(summaries.router, dependencies=_needs_consent)
 app.include_router(metrics.router, dependencies=_needs_consent)
 app.include_router(audit.router, dependencies=_needs_consent)
+app.include_router(turnos.router, dependencies=_needs_consent)
 app.include_router(centers.router)
 app.include_router(me.router)
 

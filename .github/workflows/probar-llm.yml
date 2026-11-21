@@ -1,0 +1,29 @@
+# Verifica que el modelo LLM configurado responde, con datos FICTICIOS.
+# Se lanza a mano (también desde la app de GitHub en el celular):
+# Actions → "Probar LLM" → Run workflow. Requiere el secret GEMINI_API_KEY.
+name: Probar LLM
+
+on:
+  workflow_dispatch:
+    inputs:
+      modelo:
+        description: "Modelo de Gemini a probar"
+        default: gemini-3.6-flash
+        required: true
+
+jobs:
+  probar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Llamar al modelo con datos ficticios
+        env:
+          LLM_PROVIDER: gemini
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ inputs.modelo }}
+        run: python scripts/probar_llm.py

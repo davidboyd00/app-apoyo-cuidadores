@@ -201,7 +201,8 @@ create table if not exists summaries (
   desde       timestamptz not null,
   hasta       timestamptz not null,
   contenido   text,
-  estado      text not null default 'listo' check (estado in ('generando', 'listo', 'error')),
+  estado      text not null default 'listo'
+                constraint summaries_estado_ck check (estado in ('generando', 'listo', 'error')),
   author_id   uuid references auth.users(id) on delete set null default auth.uid(),
   created_at  timestamptz not null default now(),
   constraint summaries_contenido_listo_ck check (estado <> 'listo' or contenido is not null)
@@ -221,6 +222,8 @@ create table if not exists assistant_messages (
   pregunta          text not null,
   respuesta         text not null,
   cited_entry_ids   uuid[] not null default '{}',
+  contexto_entry_ids uuid[] not null default '{}',
+  suficiente        boolean,
   created_at        timestamptz not null default now()
 );
 
@@ -851,7 +854,9 @@ comment on column medication_doses.status        is 'tomada|omitida|postpuesta. 
 comment on column medication_doses.notas         is 'Contexto opcional (ej. "vomitó a los 10min"). NUNCA se envía al audit_log.';
 
 comment on table  assistant_messages        is 'Historial IA. `cited_entry_ids` sostiene el KPI >90% verificable. Retención acotada (scripts/retention.py).';
-comment on column assistant_messages.cited_entry_ids is 'IDs de las entradas de bitácora usadas como contexto. Regla sagrada #4.';
+comment on column assistant_messages.cited_entry_ids is 'Entradas en que se basa la respuesta (citas del modelo validadas contra el contexto). Regla sagrada #4 · KPI >90% verificable.';
+comment on column assistant_messages.contexto_entry_ids is 'Todas las entradas que vio el modelo como contexto. Regla sagrada #4 (auditoría de lo visto).';
+comment on column assistant_messages.suficiente is 'False si el asistente declaró que la bitácora no alcanzaba para responder. Null en mensajes previos a la salida estructurada.';
 comment on column assistant_messages.respuesta is 'Texto generado por LLM. Contiene información derivada de bitácora → dato sensible. Nunca en logs.';
 
 comment on table  audit_log                 is 'Registro de actividades sensibles. Ley 21.719: evidencia operativa. metadata JAMÁS contiene contenido clínico.';
@@ -860,6 +865,73 @@ comment on table  consents                  is 'Aceptación versionada de la pol
 comment on table  profiles                  is 'Perfil del cuidador (nombre, teléfono) separado de auth.users. Categoría: dato personal. Expuesto solo a usuarios de la misma red de cuidado.';
 comment on column profiles.nombre           is 'Nombre visible en la red de cuidado. Finalidad: identificar al autor de entradas y a los demás miembros.';
 comment on column profiles.telefono         is 'Teléfono de contacto, opcional. Finalidad: coordinación entre miembros ante emergencias.';
+
+-- ============================================================================
+-- Turnos de cuidado (relevo familiar · EDT 2.1.1 / 2.2.2)
+-- Quién está a cargo y cuándo. NO guarda contenido clínico: el resumen del
+-- turno se arma con las entradas de la bitácora dentro de su ventana.
+-- ============================================================================
+create table if not exists care_shifts (
+  id           uuid primary key default gen_random_uuid(),
+  patient_id   uuid not null references patients(id) on delete cascade,
+  -- Persona a cargo. Si elimina su cuenta, sus turnos se eliminan con ella.
+  cuidador_id  uuid not null references auth.users(id) on delete cascade,
+  inicio       timestamptz not null,
+  fin          timestamptz not null,
+  creado_por   uuid default auth.uid() references auth.users(id) on delete set null,
+  created_at   timestamptz not null default now(),
+  constraint care_shifts_rango_ck check (fin > inicio and fin - inicio <= interval '7 days')
+);
+
+create index if not exists care_shifts_patient_inicio_idx on care_shifts (patient_id, inicio);
+create index if not exists care_shifts_cuidador_idx on care_shifts (cuidador_id);
+
+alter table care_shifts enable row level security;
+grant select, insert, delete on care_shifts to authenticated;
+
+-- ¿`uid` puede estar a cargo de `pid`? Solo admin o caregiver del grupo
+-- (un viewer no cuida). SECURITY DEFINER por la regla sagrada #0: consulta
+-- care_members sin pasar por su propia RLS.
+create or replace function puede_estar_de_turno(pid uuid, uid uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from care_members
+    where patient_id = pid and user_id = uid and role in ('admin', 'caregiver')
+  );
+$$;
+
+drop policy if exists turnos_select on care_shifts;
+create policy turnos_select on care_shifts
+  for select using (is_member(patient_id));
+
+-- Admin agenda a cualquier admin/caregiver del grupo; caregiver solo a sí mismo.
+drop policy if exists turnos_insert on care_shifts;
+create policy turnos_insert on care_shifts
+  for insert with check (
+    creado_por = auth.uid()
+    and puede_estar_de_turno(patient_id, cuidador_id)
+    and (
+      has_role(patient_id, 'admin')
+      or (has_role(patient_id, 'caregiver') and cuidador_id = auth.uid())
+    )
+  );
+
+-- Cancelar: quien lo creó, la persona a cargo o un admin (siempre miembros).
+drop policy if exists turnos_delete on care_shifts;
+create policy turnos_delete on care_shifts
+  for delete using (
+    is_member(patient_id)
+    and (creado_por = auth.uid() or cuidador_id = auth.uid() or has_role(patient_id, 'admin'))
+  );
+
+comment on table  care_shifts            is 'Turnos de cuidado (relevo familiar). Sin contenido clínico. Ley 21.719: dato personal de coordinación (quién cuida y cuándo).';
+comment on column care_shifts.cuidador_id is 'Persona a cargo durante el turno. Cascada al eliminar la cuenta (no es evidencia clínica).';
+comment on column care_shifts.creado_por  is 'Quién agendó el turno. Null si esa cuenta se eliminó.';
 
 -- ============================================================================
 -- Realtime: la bitácora se propaga en vivo entre familiares (Supabase
@@ -907,6 +979,19 @@ begin
 exception
   when duplicate_object then
     raise notice 'Realtime: log_entry_revisions ya estaba en supabase_realtime (sin cambios).';
+  when undefined_object then
+    raise notice 'Realtime: no existe la publicación supabase_realtime (fuera de Supabase); se omite.';
+end
+$$;
+
+-- Los turnos también se propagan en vivo (quién está a cargo ahora).
+do $$
+begin
+  alter publication supabase_realtime add table public.care_shifts;
+  raise notice 'Realtime: care_shifts agregada a supabase_realtime.';
+exception
+  when duplicate_object then
+    raise notice 'Realtime: care_shifts ya estaba en supabase_realtime (sin cambios).';
   when undefined_object then
     raise notice 'Realtime: no existe la publicación supabase_realtime (fuera de Supabase); se omite.';
 end

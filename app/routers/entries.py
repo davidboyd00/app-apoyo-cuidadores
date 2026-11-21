@@ -11,6 +11,7 @@ from ..schemas import (
     Entry,
     EntryAnulacion,
     EntryCreate,
+    EntryHistorial,
     EntryKind,
     EntryRevision,
     EntryRevisionEditar,
@@ -152,6 +153,34 @@ def listar_revisiones(
             metadata={"total": len(data), "ajenas": ajenas},
         )
     return data
+
+
+@router.get("/{entry_id}/historial", response_model=EntryHistorial)
+def historial(
+    patient_id: UUID,
+    entry_id: UUID,
+    db: Client = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Historial para la familia: la versión original tal como se escribió
+    (la fila de `log_entries` nunca cambia) y cada corrección o anulación con
+    su autor, hora y motivo. Es lo que promete la nota de trazabilidad de los
+    resúmenes. RLS limita a los miembros del grupo."""
+    original = (
+        db.table("log_entries")
+        .select(
+            "id, patient_id, author_id, kind, content, occurred_at, source, created_at, registrado_en"
+        )
+        .eq("id", str(entry_id))
+        .eq("patient_id", str(patient_id))
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not original:
+        raise HTTPException(404, "Entrada no encontrada o sin permisos para verla")
+    revisiones = listar_revisiones(patient_id, entry_id, db, user)
+    return {"original": original[0], "revisiones": revisiones}
 
 
 @router.post("/{entry_id}/revisiones", response_model=Entry, status_code=201)

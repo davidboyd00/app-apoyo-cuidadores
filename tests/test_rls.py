@@ -613,3 +613,144 @@ class TestVistaTrazabilidad:
             (eid,),
         )[0]
         assert fila == (0, None)
+
+
+# ---------------------------------------------------------------------------
+# Turnos de cuidado (care_shifts) · EDT 2.1.1 / 2.2.2
+# ---------------------------------------------------------------------------
+
+_TURNO = (
+    "insert into care_shifts (patient_id, cuidador_id, inicio, fin) "
+    "values (%s, %s, now(), now() + interval '8 hours') returning id"
+)
+
+
+class TestTurnos:
+    def _grupo(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        care = make_user("care@test.cl")
+        otra = make_user("otra@test.cl")
+        viewer = make_user("viewer@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        add_member(pid, care.user_id, "caregiver")
+        add_member(pid, otra.user_id, "caregiver")
+        add_member(pid, viewer.user_id, "viewer")
+        return admin, care, otra, viewer, pid
+
+    def test_admin_agenda_a_un_cuidador(self, make_user, add_member):
+        admin, care, _, _, pid = self._grupo(make_user, add_member)
+        admin.sql(_TURNO, (pid, care.user_id))
+        assert care.sql("select count(*) from care_shifts where patient_id = %s", (pid,))[0][0] == 1
+
+    def test_cuidador_se_agenda_a_si_mismo(self, make_user, add_member):
+        _, care, _, _, pid = self._grupo(make_user, add_member)
+        tid = care.sql(_TURNO, (pid, care.user_id))[0][0]
+        assert care.sql("select creado_por from care_shifts where id = %s", (tid,))[0][0] == (
+            care.user_id
+        )
+
+    def test_cuidador_no_agenda_a_otra_persona(self, make_user, add_member):
+        _, care, otra, _, pid = self._grupo(make_user, add_member)
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            care.sql(_TURNO, (pid, otra.user_id))
+
+    def test_viewer_no_puede_estar_de_turno(self, make_user, add_member):
+        admin, _, _, viewer, pid = self._grupo(make_user, add_member)
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            viewer.sql(_TURNO, (pid, viewer.user_id))
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            admin.sql(_TURNO, (pid, viewer.user_id))
+
+    def test_no_se_agenda_a_alguien_fuera_del_grupo(self, make_user, add_member):
+        admin, _, _, _, pid = self._grupo(make_user, add_member)
+        externa = make_user("externa@test.cl")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            admin.sql(_TURNO, (pid, externa.user_id))
+
+    def test_creado_por_no_puede_falsificarse(self, make_user, add_member):
+        _, care, otra, _, pid = self._grupo(make_user, add_member)
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            care.sql(
+                "insert into care_shifts (patient_id, cuidador_id, inicio, fin, creado_por) "
+                "values (%s, %s, now(), now() + interval '1 hour', %s)",
+                (pid, care.user_id, otra.user_id),
+            )
+
+    def test_fuera_del_grupo_no_ve_turnos(self, make_user, add_member):
+        admin, care, _, _, pid = self._grupo(make_user, add_member)
+        admin.sql(_TURNO, (pid, care.user_id))
+        externa = make_user("externa@test.cl")
+        assert externa.sql("select count(*) from care_shifts")[0][0] == 0
+
+    def test_quien_borra_un_turno(self, make_user, add_member):
+        admin, care, otra, viewer, pid = self._grupo(make_user, add_member)
+        t1 = admin.sql(_TURNO, (pid, care.user_id))[0][0]
+        # Otra cuidadora y la viewer no pueden borrarlo (0 filas afectadas).
+        otra.sql("delete from care_shifts where id = %s", (t1,))
+        viewer.sql("delete from care_shifts where id = %s", (t1,))
+        assert admin.sql("select count(*) from care_shifts where id = %s", (t1,))[0][0] == 1
+        # La persona a cargo sí puede cancelarlo.
+        care.sql("delete from care_shifts where id = %s", (t1,))
+        assert admin.sql("select count(*) from care_shifts where id = %s", (t1,))[0][0] == 0
+        # Y un admin puede cancelar turnos que creó otra persona.
+        t2 = care.sql(_TURNO, (pid, care.user_id))[0][0]
+        admin.sql("delete from care_shifts where id = %s", (t2,))
+        assert care.sql("select count(*) from care_shifts where id = %s", (t2,))[0][0] == 0
+
+    def test_rango_invalido_lo_rechaza_la_base(self, make_user, add_member):
+        _, care, _, _, pid = self._grupo(make_user, add_member)
+        with pytest.raises(psycopg.errors.CheckViolation):
+            care.sql(
+                "insert into care_shifts (patient_id, cuidador_id, inicio, fin) "
+                "values (%s, %s, now(), now() - interval '1 hour')",
+                (pid, care.user_id),
+            )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            care.sql(
+                "insert into care_shifts (patient_id, cuidador_id, inicio, fin) "
+                "values (%s, %s, now(), now() + interval '8 days')",
+                (pid, care.user_id),
+            )
+
+    def test_eliminar_cuenta_elimina_sus_turnos(self, make_user, add_member):
+        admin, care, _, _, pid = self._grupo(make_user, add_member)
+        admin.sql(_TURNO, (pid, care.user_id))
+        propio = admin.sql(_TURNO, (pid, admin.user_id))[0][0]
+        care.sql("select delete_my_account()")
+        assert (
+            admin.sql("select count(*) from care_shifts where patient_id = %s", (pid,))[0][0] == 1
+        )
+        # El turno del admin sigue, aunque lo hubiera creado quien se fue.
+        assert admin.sql("select id from care_shifts")[0][0] == propio
+
+
+class TestAsistenteEstructurado:
+    def test_guarda_contexto_y_suficiencia(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        eid = admin.sql(
+            "insert into log_entries (patient_id, kind, content, occurred_at) "
+            "values (%s, 'nota', 'Durmió bien', now()) returning id",
+            (pid,),
+        )[0][0]
+        admin.sql(
+            "insert into assistant_messages (patient_id, pregunta, respuesta, cited_entry_ids, "
+            "contexto_entry_ids, suficiente) values (%s, 'p', 'r', %s, %s, true)",
+            (pid, [eid], [eid]),
+        )
+        fila = admin.sql(
+            "select cited_entry_ids, contexto_entry_ids, suficiente from assistant_messages"
+        )[0]
+        assert fila == ([eid], [eid], True)
+
+    def test_mensajes_antiguos_quedan_sin_suficiencia(self, make_user, add_member):
+        admin = make_user("admin@test.cl")
+        pid = _crear_paciente(admin, "Doña Elba")
+        admin.sql(
+            "insert into assistant_messages (patient_id, pregunta, respuesta) values (%s, 'p', 'r')",
+            (pid,),
+        )
+        assert admin.sql("select contexto_entry_ids, suficiente from assistant_messages")[0] == (
+            [],
+            None,
+        )

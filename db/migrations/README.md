@@ -37,5 +37,7 @@ de abajo.
 | 2026-11-03  | `20261103_historial_inmutable_offline.sql` | pendiente de aplicar | Historial inmutable de la bitácora (`log_entry_revisions`, `log_entries_vigentes`; log_entries insert-only) + `client_id`/`registrado_en` para carga offline. Reemplaza PATCH/DELETE de entradas por revisiones y anulación. Requiere PostgreSQL 15+ (vista con `security_invoker`). Además corrige `delete_my_account`, que no reasignaba la autoría de `medication_doses`. |
 | 2026-11-18  | `20261118_resumen_asincrono.sql` | pendiente de aplicar | Resúmenes en segundo plano: `summaries.estado` (`generando`/`listo`/`error`), `contenido` opcional, `author_id` y policy de actualización solo para el autor; publicación Realtime. |
 | 2026-11-18  | `20261118_vista_trazabilidad.sql` | pendiente de aplicar | `log_entries_vigentes` agrega `revisiones_count`, `ultima_revision_at` y `ultima_revision_autor_id` para generar la nota de trazabilidad en una sola consulta. |
+| 2026-11-21  | `20261121_asistente_estructurado.sql` | pendiente de aplicar | `assistant_messages.contexto_entry_ids` y `suficiente`; `cited_entry_ids` pasa a guardar solo las citas validadas. Los mensajes previos copian su contexto a la columna nueva. |
+| 2026-11-21  | `20261121_turnos.sql` | pendiente de aplicar | Tabla `care_shifts` (turnos de cuidado) con helper `puede_estar_de_turno`, RLS y Realtime. |
 
 Al aplicar una migración, agrega una fila con la fecha y el archivo.
