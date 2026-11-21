@@ -13,7 +13,17 @@ class Settings(BaseSettings):
     llm_provider: str = "gemini"
     gemini_api_key: str | None = None
     anthropic_api_key: str | None = None
-    llm_max_tokens: int = 512
+    # Modelos configurables por entorno: Google retira modelos con pocos meses
+    # de aviso (gemini-1.5-flash ya no existe). Cambiar acá no requiere deploy
+    # de código, solo la variable GEMINI_MODEL en Render.
+    gemini_model: str = "gemini-3.6-flash"
+    # Gemini 3 razona antes de responder y esos tokens cuentan en el límite de
+    # salida. "low" basta para leer una bitácora. Vacío = default del modelo.
+    gemini_thinking_level: str | None = "low"
+    claude_model: str = "claude-haiku-4-5-20251001"
+    # Temperatura 0: misma pregunta y mismo contexto → misma respuesta (EDT 3.1.2).
+    llm_temperature: float = 0.0
+    llm_max_tokens: int = 1024
     # Acotar el contexto del LLM: menos tokens de entrada = respuesta más rápida
     # y más barata. Se envían las entradas más recientes hasta estos límites.
     resumen_max_entradas: int = 200

@@ -59,8 +59,10 @@ schema `auth` real en producción.
 3. **El LLM nunca toca la base.** El patrón es contexto cerrado: la API arma
    el contexto con la bitácora autorizada y se lo pasa. Nada de
    function-calling con acceso a datos, nada de SQL generado por el modelo.
-4. **Toda respuesta del asistente registra `cited_entry_ids`** (qué entradas
-   de bitácora vio). Es lo que hace medible el KPI de >90% verificable.
+4. **Toda respuesta del asistente registra `cited_entry_ids`** (las entradas
+   que la respuesta cita, validadas contra el contexto: un id inventado por el
+   modelo se descarta) **y `contexto_entry_ids`** (todas las que vio). Es lo que
+   hace medible el KPI de >90% verificable (`GET /metrics/asistente`).
 5. **Toda entrada de bitácora registra `author_id`.** Es lo que hace medible
    el KPI de relevo familiar (>60%).
 6. **No proceses audio en el backend.** La voz se transcribe en el cliente
@@ -92,11 +94,11 @@ app/
   config.py    settings desde .env (pydantic-settings) — incluye POLICY_VERSION
   deps.py      JWT + cliente Supabase con RLS + require_consent
   schemas.py   contrato Pydantic (avisar a Móvil ante cambios)
-  llm.py       capa LLM (proveedor abstraído)
+  llm.py       capa LLM (proveedor abstraído, salida estructurada, modelo por env)
   errors.py    handlers HTTP en español
   audit.py     registrar(...) → RPC audit_write
   routers/     patients, entries, medications, assistant, summaries,
-               metrics, centers, me (data-export/delete/consent), audit
+               metrics, centers, turnos, me (data-export/delete/consent), audit
 db/
   schema.sql   fuente de verdad (tablas + RLS + funciones + comments de
                minimización L21.719)

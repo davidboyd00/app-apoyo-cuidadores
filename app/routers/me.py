@@ -159,6 +159,14 @@ def data_export(db: Client = Depends(get_db), user=Depends(get_current_user)):
         .data
     )
     pacientes = db.table("patients").select("*").eq("created_by", uid).execute().data
+    turnos = (
+        db.table("care_shifts")
+        .select("*")
+        .eq("cuidador_id", uid)
+        .order("inicio", desc=True)
+        .execute()
+        .data
+    )
 
     registrar(
         db,
@@ -170,6 +178,7 @@ def data_export(db: Client = Depends(get_db), user=Depends(get_current_user)):
             "revisiones": len(revisiones),
             "mensajes": len(mensajes),
             "pacientes_creados": len(pacientes),
+            "turnos": len(turnos),
         },
     )
     return DataExport(
@@ -180,6 +189,7 @@ def data_export(db: Client = Depends(get_db), user=Depends(get_current_user)):
         revisiones_bitacora=revisiones,
         mensajes_asistente=mensajes,
         pacientes_creados=pacientes,
+        turnos=turnos,
     )
 
 

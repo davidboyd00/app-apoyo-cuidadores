@@ -11,15 +11,18 @@ create table if not exists auth.users (
   email  text unique
 );
 
--- auth.uid() en Supabase lee un claim del JWT. Aquí lo emulamos con una
--- setting de sesión (`request.jwt.claim.sub`) para que los tests de RLS
--- puedan "actuar como" un usuario cambiando esa setting.
+-- auth.uid() igual que en Supabase: lee el `sub` del JWT. PostgREST 12 lo
+-- entrega en `request.jwt.claims` (JSON); los tests de RLS "actúan como" un
+-- usuario seteando `request.jwt.claim.sub` directamente. Se aceptan ambas.
 create or replace function auth.uid()
 returns uuid
 language sql
 stable
 as $$
-  select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+  select coalesce(
+    nullif(current_setting('request.jwt.claim.sub', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+  )::uuid;
 $$;
 
 -- Rol `authenticated` que emula el rol al que Supabase entrega los tokens

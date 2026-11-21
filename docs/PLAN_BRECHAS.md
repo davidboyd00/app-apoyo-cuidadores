@@ -20,6 +20,12 @@ disponibilidad** de datos personales, incluyendo (no exhaustivo):
 - Compromiso de la cuenta Supabase o del hosting.
 - Fuga a través del proveedor LLM (respuestas que contengan datos de otro paciente).
 - Borrado o corrupción masiva no autorizada.
+- Filtración de `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` (alguien podría usar
+  la cuota; no da acceso a la base): rotar según `docs/DESPLIEGUE.md`.
+- Pérdida o robo de un dispositivo con registros **pendientes de
+  sincronizar** (cola offline en el navegador): el contenido pendiente está
+  en el equipo. Pedir a la familia que cierre sesión desde otro equipo
+  cambiando la contraseña, y evaluar con el titular si corresponde notificar.
 
 ## 2. Cómo se detecta
 

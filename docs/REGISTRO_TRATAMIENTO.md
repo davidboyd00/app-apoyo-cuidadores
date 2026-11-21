@@ -21,7 +21,8 @@ de dato debe actualizar este archivo en el mismo PR.
 | `medications`          | Régimen medicamentoso                         | **Sensible (salud)**  | Seguimiento clínico; base para el cálculo de próximas dosis.              |
 | `medication_doses`     | Adherencia farmacológica (dosis administradas) | **Sensible (salud)**  | Evidencia clínica + KPI de relevo familiar; insumo del resumen médico.    |
 | `summaries`            | Resúmenes médicos generados                   | **Sensible (salud)**  | Documento derivado para consulta médica.                                  |
-| `assistant_messages`   | Consultas al asistente IA + respuestas        | **Sensible (salud)**  | Historial del asistente; KPI de trazabilidad (`cited_entry_ids`).         |
+| `assistant_messages`   | Consultas al asistente IA + respuestas        | **Sensible (salud)**  | Historial del asistente; KPI de trazabilidad (`cited_entry_ids`, `contexto_entry_ids`). |
+| `care_shifts`          | Turnos de cuidado (quién está a cargo y cuándo) | Personal (coordinación) | Relevo familiar: organizar turnos; sin contenido clínico.               |
 | `consents`             | Aceptación versionada de la política          | Personal              | Evidencia del consentimiento (art. 12 Ley 21.719).                        |
 | `audit_log`            | Registro de accesos y acciones sensibles      | Personal (metadatos)  | Evidencia operativa de cumplimiento; transparencia al admin del grupo.    |
 | `centers`              | Datos públicos de centros de salud/farmacias  | No personal           | Consulta de referencia; poblada por scrapers.                             |
@@ -93,13 +94,22 @@ Cada bloque cubre las siete columnas del "registro" que exige la Ley 21.719
 - **Derechos:** acceso, supresión vía cascade.
 
 ### `assistant_messages`
-- **Datos:** `pregunta`, `respuesta`, `cited_entry_ids`, `author_id`.
+- **Datos:** `pregunta`, `respuesta`, `cited_entry_ids` (entradas citadas, validadas), `contexto_entry_ids` (entradas que vio el modelo), `suficiente` (si la bitácora alcanzaba), `author_id`.
 - **Base de licitud:** consentimiento (al aceptar la política, el cuidador consiente el uso del asistente IA).
 - **Dónde vive:** Supabase.
 - **Quién accede:** miembros del grupo (RLS `asst_select`).
 - **Sale a terceros:** cada consulta envía `pregunta` + contexto de bitácora al LLM. Ver §Terceros.
 - **Retención:** **6 meses** (configurable con `RETENTION_MONTHS_ASSISTANT`). Purga automática mensual vía `scripts/retention.py` + `.github/workflows/retention.yml`. Justificación: dato derivado que pierde valor operativo pasado el semestre; conservarlo indefinidamente aumenta superficie sin beneficio.
 - **Derechos:** acceso (`GET /me/data-export` incluye mensajes propios); supresión vía cascade del paciente o vencimiento por retención.
+
+### `care_shifts` (turnos de cuidado)
+- **Datos:** `cuidador_id` (persona a cargo), `inicio`, `fin`, `creado_por`. **Sin contenido clínico**: el resumen del turno lo arma la app con las entradas de la bitácora de esa ventana.
+- **Base de licitud:** consentimiento (al aceptar la política, el cuidador consiente la coordinación del cuidado dentro del grupo).
+- **Dónde vive:** Supabase.
+- **Quién accede:** miembros del grupo (RLS `turnos_select`). Agenda un admin (a cualquier admin/cuidador del grupo) o un cuidador (solo a sí mismo); cancela quien lo creó, la persona a cargo o un admin.
+- **Sale a terceros:** no.
+- **Retención:** mientras exista el grupo. **PENDIENTE (equipo)**: evaluar purga de turnos con más de 6 meses en `scripts/retention.py`.
+- **Derechos:** acceso (`GET /me/data-export` incluye `turnos` del usuario); supresión: al eliminar la cuenta, sus turnos se eliminan en cascada.
 
 ### `consents`
 - **Datos:** `user_id`, `version`, `aceptado_en`.
@@ -146,8 +156,26 @@ Cada bloque cubre las siete columnas del "registro" que exige la Ley 21.719
 |-----------------------|----------------------------------------------|-------------------------------------------------------------------------------------|-----------------------|
 | Supabase (Postgres/Auth/Realtime) | Encargado principal (base de datos + auth)    | Todo el tratamiento (es el hosting).                                                | Sí (es el repositorio).|
 | Render (hosting API)  | Encargado (compute)                          | Requests en tránsito; no persiste datos clínicos (la API es stateless).             | No (efímero).         |
-| Gemini / Anthropic (LLM) | Encargado ad-hoc (procesamiento IA transitorio) | Por consulta: pregunta del cuidador + contexto de bitácora del paciente autorizado. | **No** (no almacenamos en el proveedor; contexto transitorio). |
+| Gemini / Anthropic (LLM) | Encargado ad-hoc (procesamiento IA transitorio) | Por consulta: pregunta del cuidador + contexto de bitácora del paciente autorizado. | Nosotros no almacenamos nada allá. **Ojo capa gratuita de Gemini**: ver nota abajo. |
+| Servicio de voz del navegador (Google en Chrome, Apple en Safari) | Tercero elegido por el usuario al dictar | Audio del dictado, solo si el usuario presiona el micrófono. El backend nunca recibe audio (regla sagrada #6). | Según los términos del navegador. |
 | GitHub Actions        | Encargado (ejecución de cron y CI)           | Corre `scripts/retention.py` con service role.                                      | No (efímero por ejecución). |
+
+**BLOQUEANTE PARA EL PILOTO CON DATOS REALES · capa gratuita de Gemini.**
+Los términos vigentes de la Gemini API (efectivos desde el 23/03/2026) dicen
+que en los "Unpaid Services" Google usa lo enviado y las respuestas para
+mejorar sus productos, que revisores humanos pueden leerlos y piden **no
+enviar información sensible, confidencial ni personal**. La bitácora es dato
+de salud. Decisión del equipo antes del piloto (EDT 5.2.1):
+(a) activar facturación en el proyecto de Gemini (capa pagada: no usa los
+prompts para mejorar productos; costo del piloto estimado en centavos de
+dólar) o usar Claude (`LLM_PROVIDER=claude`), o
+(b) mantener la capa gratuita **solo con datos ficticios** (demo y pruebas).
+Hasta decidir, la demo usa datos ficticios. Fuente:
+https://ai.google.dev/gemini-api/terms
+
+**Dictado por voz:** la transcripción ocurre en el navegador; en Chrome el
+audio va al servicio de voz de Google. La app lo informa junto al botón de
+micrófono y el dictado es opcional (siempre se puede escribir).
 
 **PENDIENTE JURÍDICO**: firmar contrato de encargo (art. 24 Ley 21.719) con
 Supabase, Render y el proveedor LLM elegido, o documentar por qué las

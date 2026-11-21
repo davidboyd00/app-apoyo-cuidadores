@@ -44,6 +44,11 @@ jobs:
       PGPORT: "5432"
       PGUSER: postgres
       PGPASSWORD: postgres
+      # Valores de prueba: Settings los exige al importar la app. Ningún test
+      # llama a Supabase real (las pruebas de integración usan PostgREST local).
+      SUPABASE_URL: https://test.supabase.co
+      SUPABASE_ANON_KEY: test
+      SUPABASE_JWT_SECRET: testsecret
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -52,5 +57,12 @@ jobs:
           cache: pip
       - name: Install deps
         run: pip install -r requirements-dev.txt
-      - name: pytest
-        run: pytest -v
+      - name: Install PostgREST (pruebas de integración, EDT 5.1.1)
+        run: |
+          curl -sSL https://github.com/PostgREST/postgrest/releases/download/v12.2.3/postgrest-v12.2.3-linux-static-x64.tar.xz \
+            | sudo tar -xJ -C /usr/local/bin
+          postgrest --version
+      - name: pytest (unitarias, RLS, migraciones e integración)
+        env:
+          POSTGREST_BIN: /usr/local/bin/postgrest
+        run: python -m pytest -v
