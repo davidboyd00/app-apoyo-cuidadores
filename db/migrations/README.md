@@ -23,8 +23,11 @@ Cada cambio al modelo de datos se acompaña de **dos** archivos en el mismo PR:
 
 ## Cómo aplicar en Supabase
 
-Desde el SQL Editor del proyecto, ejecutar el archivo de migración más
-reciente que aún no se haya aplicado. No hay tabla de tracking automática
+Si hay varias pendientes, usar el paquete `db/APLICAR_EN_SUPABASE.sql`
+(todas en orden, en una transacción, con tabla de verificación final). Se
+arma con `python scripts/armar_paquete_migraciones.py`, actualizando ahí la
+lista `PENDIENTES`. Si es una sola, se puede correr el archivo directo desde
+el SQL Editor del proyecto. No hay tabla de tracking automática
 por ahora (proyecto piloto); llevamos el registro por convención en la lista
 de abajo.
 

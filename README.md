@@ -90,12 +90,15 @@ Los detalles están en `/docs` (OpenAPI). Este resumen es para orientarse:
 | Área                | Endpoints                                                                 |
 |---------------------|---------------------------------------------------------------------------|
 | Pacientes           | `GET|POST /patients`, `GET|DELETE /patients/{id}`                         |
-| Bitácora            | `GET|POST /patients/{id}/entries`, `PATCH|DELETE /entries/{eid}`          |
+| Bitácora            | `GET|POST /patients/{id}/entries` (offline: `client_id`, `registrado_en`)  |
+|                     | `POST /entries/{eid}/revisiones`, `POST /entries/{eid}/anulacion`,        |
+|                     | `GET /entries/{eid}/historial`, `GET /entries/{eid}/revisiones`          |
+| Turnos de cuidado   | `GET|POST /patients/{id}/turnos`, `DELETE /turnos/{tid}`                  |
 | Medicamentos        | `GET|POST /patients/{id}/medications`, `PATCH`, `POST /desactivar`        |
 | Asistente IA        | `POST /assistant/ask`, `GET /messages`, `GET /conversations`,             |
 |                     | `GET /conversations/{cid}/messages`                                       |
-| Resúmenes           | `GET|POST /patients/{id}/summaries`                                       |
-| Métricas            | `GET /patients/{id}/metrics/relevo`                                        |
+| Resúmenes           | `GET|POST /patients/{id}/summaries` (202 + `GET /summaries/{sid}`)        |
+| Métricas (KPIs)     | `GET /patients/{id}/metrics/relevo`, `GET /patients/{id}/metrics/asistente` |
 | Auditoría (admin)   | `GET /patients/{id}/audit`                                                |
 | Centros (público)   | `GET /centers`                                                            |
 | Consentimiento      | `GET|POST /me/consent`                                                     |
@@ -111,11 +114,35 @@ Ver `CLAUDE.md` "Reglas sagradas". Resumen operativo:
    DEFINER). No agregues checks de rol ad-hoc en Python.
 3. El LLM recibe contexto cerrado (bitácora autorizada por RLS), nunca
    toca la base ni tiene function-calling.
-4. Toda respuesta del asistente persiste `cited_entry_ids`.
+4. Toda respuesta del asistente persiste `cited_entry_ids` (citas
+   validadas) y `contexto_entry_ids` (lo que vio).
 5. Toda entrada de bitácora persiste `author_id` (default `auth.uid()`).
 6. Audio nunca llega al backend.
 7. Ningún log de aplicación ni fila de `audit_log` contiene contenido
    clínico. Solo ids/counts/flags.
+
+## Pruebas de integración y demo local
+
+Sin Supabase ni IA real: Postgres local + PostgREST (como en Supabase) + la
+API con un LLM simulado.
+
+```bash
+# binario de PostgREST v12 (una vez)
+curl -sSL https://github.com/PostgREST/postgrest/releases/download/v12.2.3/postgrest-v12.2.3-linux-static-x64.tar.xz | tar -xJ
+export POSTGREST_BIN=$PWD/postgrest
+
+python -m pytest -m integracion        # flujo completo por HTTP, incluida concurrencia
+python -m tests.integracion.demo       # demo con datos ficticios en :8001 (API) y :54321
+```
+
+La web se puede apuntar a la demo (ver `e2e/flujo_real.py` en el repo web).
+
+## Puesta en producción
+
+`docs/DESPLIEGUE.md`: paquete único de migraciones para Supabase, variables
+de Render, secrets de GitHub, verificación del modelo de IA ("Probar LLM",
+también desde el celular) y rotación de claves. Cambios para el cliente
+móvil: `docs/CAMBIOS_API_MOVIL.md`.
 
 ## Pendientes conocidos
 
@@ -123,5 +150,8 @@ Ver `CLAUDE.md` "Reglas sagradas". Resumen operativo:
   contratos de encargo con proveedores (Supabase, LLM, Render), definir
   plazos de retención de `audit_log`, evaluar transferencias
   internacionales, definir roles DPO/coordinación.
-- **Producto**: scrapers reales (`scripts/*.py` de otro integrante),
-  notificaciones/recordatorios de medicamentos.
+- **Producto**: scrapers reales (`scripts/*.py` de otro integrante);
+  notificaciones push de medicamentos (la web muestra las próximas dosis,
+  el móvil puede agendarlas con `GET /medications/upcoming`).
+- **Decisión de equipo**: capa del LLM para el piloto con datos reales
+  (`docs/DESPLIEGUE.md` §6).

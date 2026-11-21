@@ -66,10 +66,16 @@ async def usuario(request: Request) -> Response:
     )
 
 
+async def logout(request: Request) -> Response:
+    # Como GoTrue: cerrar sesión responde 204 (no hay sesiones de servidor acá).
+    return Response(status_code=204)
+
+
 app = Starlette(
     routes=[
         Route("/rest/v1/{ruta:path}", rest, methods=["GET", "POST", "PATCH", "PUT", "DELETE"]),
         Route("/auth/v1/user", usuario, methods=["GET"]),
+        Route("/auth/v1/logout", logout, methods=["POST"]),
     ],
     middleware=[
         Middleware(
