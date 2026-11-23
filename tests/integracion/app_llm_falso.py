@@ -18,7 +18,7 @@ _LINEA_RESUMEN = re.compile(r"^[^·]*· (\w+)(?: \[corregida\])?: (.+)$", re.M)
 
 
 class LLMFalso:
-    async def generar(self, prompt_sistema, contexto, pregunta, esquema=None):
+    async def generar(self, prompt_sistema, contexto, pregunta, esquema=None, max_tokens=None):
         if esquema is not None:
             entradas = _LINEA_ASISTENTE.findall(contexto)[:2]
             if not entradas:

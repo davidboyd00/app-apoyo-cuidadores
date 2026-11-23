@@ -13,6 +13,7 @@ Los logs NUNCA llevan contenido clínico: solo nombre de etapa, tiempo y conteos
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -32,8 +33,25 @@ PROMPT_RESUMEN = (
     "priorizando cambios de síntomas, adherencia a medicamentos y eventos "
     "relevantes. Basa el resumen EXCLUSIVAMENTE en las entradas provistas. "
     "Las entradas marcadas [corregida] fueron corregidas por la familia: usa "
-    "su versión vigente, que es la que se te entrega."
+    "su versión vigente, que es la que se te entrega. "
+    "Escribe en texto plano, sin Markdown: nada de asteriscos, almohadillas ni "
+    "negritas; para listas usa un guion al inicio de la línea."
 )
+
+_MARCAS = re.compile(r"\*\*|__")
+_TITULO = re.compile(r"^\s{0,3}#{1,6}\s*")
+_VINETA = re.compile(r"^(\s*)[*•]\s+")
+
+
+def texto_plano(texto: str) -> str:
+    """Quita el Markdown que el modelo a veces agrega igual: el resumen se
+    muestra, se copia y se imprime como texto plano."""
+    lineas = []
+    for linea in texto.splitlines():
+        linea = _TITULO.sub("", _MARCAS.sub("", linea))
+        lineas.append(_VINETA.sub(r"\1- ", linea).rstrip())
+    return "\n".join(lineas).strip()
+
 
 # Máximo de correcciones listadas una a una en la nota (el resto se resume).
 MAX_CORRECCIONES_LISTADAS = 15
@@ -174,7 +192,9 @@ async def construir_resumen(db: Client, patient_id: UUID, desde: datetime, hasta
         vigentes, settings.resumen_max_entradas, settings.resumen_max_caracteres
     )
     with medir("llm"):
-        texto_ia = await ask_llm(contexto, PROMPT_RESUMEN)
+        texto_ia = texto_plano(
+            await ask_llm(contexto, PROMPT_RESUMEN, max_tokens=settings.llm_max_tokens_resumen)
+        )
 
     with medir("nota"):
         nota = _nota_trazabilidad(db, desde, hasta, vigentes, anuladas, enviadas)
