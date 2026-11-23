@@ -130,7 +130,8 @@ def test_paquete_esta_al_dia_con_las_migraciones():
 
 @pytest.fixture(scope="module")
 def bases():
-    prod = _base("caregivers_mig_prod", AUTH_MOCK_SQL, PRODUCCION, SEED_PLACEHOLDER_SQL)
+    # Como producción el 22/11: sin el usuario anónimo (seed nunca aplicado).
+    prod = _base("caregivers_mig_prod", AUTH_MOCK_SQL, PRODUCCION)
     _sembrar_datos_de_produccion(prod)
     paquete = PAQUETE.read_text()
     with _connect(prod) as conn, conn.cursor() as cur:
@@ -173,3 +174,30 @@ def test_datos_existentes_sobreviven(bases):
             "select cited_entry_ids, contexto_entry_ids, suficiente from assistant_messages"
         )
         assert cur.fetchall() == [([UUID(ENTRADA)], [UUID(ENTRADA)], None)]
+
+
+def test_paquete_crea_el_usuario_anonimo(bases):
+    """Sin él, eliminar una cuenta con registros falla por la llave foránea.
+    Debe quedar como un usuario real de Supabase Auth (aud, role, instancia y
+    tokens en '' en vez de null) para no romper la lista de usuarios del panel,
+    y sin contraseña."""
+    prod, _ = bases
+    with _connect(prod) as conn, conn.cursor() as cur:
+        cur.execute(
+            "select email, aud, role, instance_id::text, encrypted_password, "
+            "email_confirmed_at is not null, confirmation_token, recovery_token, "
+            "email_change_token_new, email_change "
+            "from auth.users where id = '00000000-0000-0000-0000-000000000000'"
+        )
+        assert cur.fetchone() == (
+            "eliminado@caregivers.local",
+            "authenticated",
+            "authenticated",
+            "00000000-0000-0000-0000-000000000000",
+            "",
+            True,
+            "",
+            "",
+            "",
+            "",
+        )

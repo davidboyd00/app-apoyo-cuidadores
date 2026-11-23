@@ -90,42 +90,16 @@ Los 7 deben aparecer con `prosecdef = t`.
 
 ## 3. Placeholder de usuario eliminado
 
-**No incluido en `db/schema.sql`** — `auth.users` en producción tiene
-columnas obligatorias que el schema portable no puede rellenar. Correr
-una sola vez desde el SQL Editor:
+**No incluido en `db/schema.sql`** (`auth.users` es de Supabase Auth). El
+INSERT está en `db/seed_placeholder.sql` y **va incluido en
+`db/APLICAR_EN_SUPABASE.sql`**: si aplicaste el paquete, ya está. En un
+proyecto nuevo, correr ese archivo una vez desde el SQL Editor (es
+idempotente).
 
-```sql
--- Ley 21.719 · usuario placeholder al que se reasignan author_id tras
--- ejercer derecho de supresión. UUID fijo, referenciado por la función
--- delete_my_account() del schema.
-insert into auth.users (
-  instance_id,
-  id,
-  aud,
-  role,
-  email,
-  encrypted_password,
-  email_confirmed_at,
-  created_at,
-  updated_at,
-  raw_app_meta_data,
-  raw_user_meta_data
-)
-values (
-  '00000000-0000-0000-0000-000000000000',
-  '00000000-0000-0000-0000-000000000000',
-  'authenticated',
-  'authenticated',
-  'eliminado@caregivers.local',
-  '',                                        -- sin password, no puede iniciar sesión
-  now(),
-  now(),
-  now(),
-  '{"provider":"placeholder","providers":[]}'::jsonb,
-  '{}'::jsonb
-)
-on conflict (id) do nothing;
-```
+Los tokens del usuario (`confirmation_token`, `recovery_token`,
+`email_change_token_new`, `email_change`) van en `''` y no en `null`:
+Supabase Auth falla al leer un usuario con null en ellos y la lista de
+usuarios del panel deja de cargar.
 
 Verificación:
 
@@ -170,4 +144,4 @@ No re-correr `db/schema.sql` en un proyecto ya vivo. Usar
 | `permission denied for schema public`                    | Ejecutas como rol no-superuser              | Usar SQL Editor del dashboard (corre como `postgres`).     |
 | `function auth.uid() does not exist`                     | El schema `auth` no está / rol wrong        | Comprobar que el proyecto Supabase esté sano.              |
 | `role "authenticated" already exists`                    | Es esperado                                 | Los `do $$` con exception handler lo cachean; ignorar.     |
-| `ForeignKeyViolation` al llamar `delete_my_account()`    | Falta el placeholder                        | Correr el INSERT del §3.                                   |
+| `ForeignKeyViolation` al llamar `delete_my_account()`    | Falta el placeholder                        | Correr `db/seed_placeholder.sql` (§3).                     |

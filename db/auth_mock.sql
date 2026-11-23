@@ -6,9 +6,25 @@
 
 create schema if not exists auth;
 
+-- Además de (id, email), las columnas de Supabase Auth que rellena
+-- db/seed_placeholder.sql, con los mismos nombres y tipos que en producción
+-- (allá también son opcionales). Así el mismo INSERT corre en local y en Supabase.
 create table if not exists auth.users (
-  id     uuid primary key default gen_random_uuid(),
-  email  text unique
+  id                     uuid primary key default gen_random_uuid(),
+  email                  text unique,
+  instance_id            uuid,
+  aud                    varchar(255),
+  role                   varchar(255),
+  encrypted_password     varchar(255),
+  email_confirmed_at     timestamptz,
+  confirmation_token     varchar(255),
+  recovery_token         varchar(255),
+  email_change_token_new varchar(255),
+  email_change           varchar(255),
+  raw_app_meta_data      jsonb,
+  raw_user_meta_data     jsonb,
+  created_at             timestamptz,
+  updated_at             timestamptz
 );
 
 -- auth.uid() igual que en Supabase: lee el `sub` del JWT. PostgREST 12 lo
