@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from app import resumen
 from app.config import settings
 from app.deps import get_current_user, get_db, require_consent
+from app.llm import LLMError
 from app.main import app
 
 PACIENTE = "00000000-0000-0000-0000-0000000000aa"
@@ -88,17 +89,26 @@ def ctx(monkeypatch):
     db = MagicMock()
     db.table.side_effect = lambda nombre: tablas[nombre]
     llamadas: list[str] = []
+    limites: list[int | None] = []
+    respuesta = {"texto": "Resumen de la IA."}
 
-    async def llm_falso(contexto: str, pregunta: str) -> str:
+    async def llm_falso(contexto: str, pregunta: str, max_tokens: int | None = None) -> str:
         llamadas.append(contexto)
-        return "Resumen de la IA."
+        limites.append(max_tokens)
+        return respuesta["texto"]
 
     monkeypatch.setattr(resumen, "ask_llm", llm_falso)
     app.dependency_overrides[get_current_user] = lambda: {"sub": AUTORA}
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[require_consent] = lambda: None
     try:
-        yield SimpleNamespace(client=TestClient(app), tablas=tablas, llamadas=llamadas)
+        yield SimpleNamespace(
+            client=TestClient(app),
+            tablas=tablas,
+            llamadas=llamadas,
+            limites=limites,
+            respuesta=respuesta,
+        )
     finally:
         app.dependency_overrides.clear()
 
@@ -225,7 +235,7 @@ def test_nota_no_expone_contenido_clinico_ni_motivos(ctx):
 
 
 def test_fallo_del_llm_marca_error_sin_contenido_y_no_loguea_el_texto(ctx, monkeypatch, caplog):
-    async def llm_caido(contexto: str, pregunta: str) -> str:
+    async def llm_caido(contexto: str, pregunta: str, max_tokens: int | None = None) -> str:
         raise RuntimeError("cuota agotada con Juan Pérez: texto clínico")
 
     monkeypatch.setattr(resumen, "ask_llm", llm_caido)
@@ -237,6 +247,38 @@ def test_fallo_del_llm_marca_error_sin_contenido_y_no_loguea_el_texto(ctx, monke
     assert ctx.tablas["summaries"].update.call_args.args[0] == {"estado": "error"}
     assert "Juan Pérez" not in caplog.text
     assert "RuntimeError" in caplog.text
+
+
+def test_resumen_cortado_por_limite_queda_en_error_no_listo(ctx, monkeypatch):
+    """Un resumen médico incompleto no puede mostrarse como si estuviera completo."""
+
+    async def llm_cortado(contexto: str, pregunta: str, max_tokens: int | None = None) -> str:
+        raise LLMError("Gemini cortó la respuesta por el límite de tokens (MAX_TOKENS)")
+
+    monkeypatch.setattr(resumen, "ask_llm", llm_cortado)
+    _preparar(ctx, [])
+
+    assert ctx.client.post(URL).status_code == 202
+    assert ctx.tablas["summaries"].update.call_args.args[0] == {"estado": "error"}
+
+
+def test_resumen_pide_su_propio_limite_de_tokens(ctx):
+    _preparar(ctx, [])
+    ctx.client.post(URL)
+    assert ctx.limites == [settings.llm_max_tokens_resumen]
+    assert settings.llm_max_tokens_resumen > settings.llm_max_tokens
+
+
+def test_resumen_se_guarda_en_texto_plano(ctx):
+    ctx.respuesta["texto"] = (
+        "**Resumen para la consulta:**\n## Síntomas\n* Mareo leve el 18/11.\n• Presión 138/86."
+    )
+    _preparar(ctx, [])
+    ctx.client.post(URL)
+    texto_ia = _contenido_final(ctx).split("\n\n")[0]
+    assert texto_ia == (
+        "Resumen para la consulta:\nSíntomas\n- Mareo leve el 18/11.\n- Presión 138/86."
+    )
 
 
 # --- Una sola consulta -------------------------------------------------------

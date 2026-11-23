@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Temperatura 0: misma pregunta y mismo contexto → misma respuesta (EDT 3.1.2).
     llm_temperature: float = 0.0
     llm_max_tokens: int = 1024
+    # El resumen médico es más largo que una respuesta del asistente y el
+    # razonamiento también gasta de este límite: con 1024 salía cortado.
+    llm_max_tokens_resumen: int = 4096
     # Acotar el contexto del LLM: menos tokens de entrada = respuesta más rápida
     # y más barata. Se envían las entradas más recientes hasta estos límites.
     resumen_max_entradas: int = 200

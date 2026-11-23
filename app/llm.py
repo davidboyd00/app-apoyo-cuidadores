@@ -61,7 +61,12 @@ class LLMError(RuntimeError):
 
 class LLMProvider(Protocol):
     async def generar(
-        self, prompt_sistema: str, contexto: str, pregunta: str, esquema: dict | None = None
+        self,
+        prompt_sistema: str,
+        contexto: str,
+        pregunta: str,
+        esquema: dict | None = None,
+        max_tokens: int | None = None,
     ) -> str: ...
 
 
@@ -84,9 +89,24 @@ def _motivo_fin(resp) -> str:
     return "desconocido"
 
 
+def _cortada_por_limite(resp) -> bool:
+    """True si Gemini dejó de escribir por el límite de tokens: el texto está
+    incompleto y no se puede mostrar como si estuviera completo."""
+    try:
+        razon = getattr((resp.candidates or [None])[0], "finish_reason", None)
+        return str(getattr(razon, "name", razon)) == "MAX_TOKENS"
+    except Exception:  # noqa: BLE001 - sin candidatos: no hay evidencia de corte
+        return False
+
+
 class GeminiProvider:
     async def generar(
-        self, prompt_sistema: str, contexto: str, pregunta: str, esquema: dict | None = None
+        self,
+        prompt_sistema: str,
+        contexto: str,
+        pregunta: str,
+        esquema: dict | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         from google import genai
         from google.genai import types
@@ -97,7 +117,7 @@ class GeminiProvider:
         opciones: dict = {
             "system_instruction": prompt_sistema,
             "temperature": settings.llm_temperature,
-            "max_output_tokens": settings.llm_max_tokens,
+            "max_output_tokens": max_tokens or settings.llm_max_tokens,
         }
         if settings.gemini_thinking_level:
             opciones["thinking_config"] = types.ThinkingConfig(
@@ -116,12 +136,20 @@ class GeminiProvider:
         texto = resp.text
         if not texto:
             raise LLMError(f"Gemini no devolvió texto (motivo: {_motivo_fin(resp)})")
+        if _cortada_por_limite(resp):
+            # Un resumen médico cortado no puede pasar por completo.
+            raise LLMError("Gemini cortó la respuesta por el límite de tokens (MAX_TOKENS)")
         return texto
 
 
 class ClaudeProvider:
     async def generar(
-        self, prompt_sistema: str, contexto: str, pregunta: str, esquema: dict | None = None
+        self,
+        prompt_sistema: str,
+        contexto: str,
+        pregunta: str,
+        esquema: dict | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         from anthropic import AsyncAnthropic
 
@@ -137,7 +165,7 @@ class ClaudeProvider:
         client = AsyncAnthropic(api_key=settings.anthropic_api_key)
         msg = await client.messages.create(
             model=settings.claude_model,
-            max_tokens=settings.llm_max_tokens,
+            max_tokens=max_tokens or settings.llm_max_tokens,
             temperature=settings.llm_temperature,
             system=sistema,
             messages=[{"role": "user", "content": _mensaje(contexto, pregunta)}],
@@ -145,6 +173,8 @@ class ClaudeProvider:
         texto = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
         if not texto:
             raise LLMError(f"Claude no devolvió texto (motivo: {msg.stop_reason})")
+        if msg.stop_reason == "max_tokens":
+            raise LLMError("Claude cortó la respuesta por el límite de tokens (max_tokens)")
         return texto
 
 
@@ -229,9 +259,10 @@ def interpretar(texto: str, ids_validos: set[str]) -> RespuestaAsistente:
     )
 
 
-async def ask_llm(contexto: str, pregunta: str) -> str:
-    """Texto libre (lo usa el resumen médico)."""
-    return await _proveedor().generar(PROMPT_SISTEMA, contexto, pregunta)
+async def ask_llm(contexto: str, pregunta: str, max_tokens: int | None = None) -> str:
+    """Texto libre (lo usa el resumen médico). Falla con LLMError si la
+    respuesta quedó cortada por el límite de tokens."""
+    return await _proveedor().generar(PROMPT_SISTEMA, contexto, pregunta, max_tokens=max_tokens)
 
 
 async def ask_llm_citado(contexto: str, pregunta: str, ids_validos: set[str]) -> RespuestaAsistente:
