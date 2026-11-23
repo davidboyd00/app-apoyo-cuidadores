@@ -1,0 +1,36 @@
+{
+  "preguntas": [
+    {
+      "pregunta": "¿Cómo ha estado su ánimo esta semana?",
+      "intentos": 1,
+      "segundos": 2.0,
+      "respuesta": "Esta semana se ha registrado que estuvo tranquila toda la tarde del 19 de noviembre conversando con su nieta por videollamada, y el 23 de noviembre se observó contenta armando un rompecabezas.",
+      "muestra_registros": true,
+      "dice_que_no_alcanza": false
+    },
+    {
+      "pregunta": "¿Cuánto pesa actualmente?",
+      "intentos": 1,
+      "segundos": 24.6,
+      "respuesta": "La información sobre el peso actual no se encuentra disponible en la bitácora de cuidado.",
+      "muestra_registros": false,
+      "dice_que_no_alcanza": true
+    }
+  ],
+  "resumen": {
+    "texto": "← Resúmenes\nCopiar texto\nImprimir o guardar PDF\nResumen de cuidado\n\nElba Soto · 85 años\n\nPeríodo: 24 de octubre de 2026 a las 17:02 al 23 de noviembre de 2026 a las 17:02\n\nGenerado: 23 de noviembre de 2026 a las 17:02\n\nResumen para la consulta médica:\n\n- Síntomas: Mareo leve al levantarse el 18-nov (remitido al sentarse). Presión arterial de 138/86 en la mañana del 22-nov, sin dolor de cabeza.\n- Medicamentos: Tomó losartán 50 mg y metformina 850 mg con el desayuno el 21-nov.\n- Eventos relevantes: Realizó caminata de 15 minutos con bastón por el jardín (18-nov). Durmió de corrido, levantándose una sola vez al baño (22-nov).\n- Ánimo y comportamiento: Estuvo tranquila y contenta (realizó videollamada y armó un rompecabezas).\n\n\nTrazabilidad del registro (generada por el sistema, no por IA)\nPeríodo: 24-10-2026 17:02 a 23-11-2026 17:02\nEntradas consideradas: 9 · Corregidas: 1 · Anuladas y excluidas del resumen: 0\nCorrecciones:\n- Entrada del 21-11-2026 15:01 (medicamento): corregida el 23-11-2026 17:01 por Ana Soto.\nLa versión original, el autor, la hora y el motivo de cada corrección o anulación están disponibles en el historial de la aplicación.\nRedactado con IA a partir de lo que la familia registró en la bitácora. No reemplaza la evaluación de un profesional de salud.",
+    "segundos": 18.5
+  },
+  "trazabilidad": [
+    {
+      "pregunta": "¿Cuánto pesa actualmente?",
+      "citas_validas": 0,
+      "suficiente": false
+    },
+    {
+      "pregunta": "¿Cómo ha estado su ánimo esta semana?",
+      "citas_validas": 2,
+      "suficiente": true
+    }
+  ]
+}
