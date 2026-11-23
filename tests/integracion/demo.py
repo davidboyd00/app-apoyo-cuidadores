@@ -1,8 +1,9 @@
-"""Demo local con datos FICTICIOS sobre el stack real (sin Supabase ni IA real).
+"""Demo local con datos FICTICIOS sobre el stack real (sin Supabase).
 
-    POSTGREST_BIN=/ruta/postgrest python -m tests.integracion.demo [--salida demo.json]
+    POSTGREST_BIN=/ruta/postgrest python -m tests.integracion.demo [--salida demo.json] [--llm-real]
 
-Levanta Postgres + PostgREST + API (LLM simulado) en puertos fijos, carga una
+Levanta Postgres + PostgREST + API (LLM simulado, o el real con `--llm-real` y
+`GEMINI_API_KEY` en el entorno) en puertos fijos, carga una
 familia de ejemplo por la API (como lo haría la app) y deja todo corriendo
 hasta Ctrl+C. Escribe en `--salida` las URLs y los tokens de las personas de
 ejemplo, para abrir la web local o automatizar pruebas de la interfaz.
@@ -227,12 +228,19 @@ def sembrar(stack) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--salida", default="demo-local.json")
+    parser.add_argument(
+        "--llm-real",
+        action="store_true",
+        help="usar el proveedor de IA configurado (solo datos ficticios)",
+    )
     args = parser.parse_args()
     binario = os.environ.get("POSTGREST_BIN") or shutil.which("postgrest")
     if not binario:
         print("Falta PostgREST: define POSTGREST_BIN", file=sys.stderr)
         return 2
-    with levantar_stack(binario, puerto_api=PUERTO_API, puerto_supabase=PUERTO_SUPABASE) as stack:
+    with levantar_stack(
+        binario, puerto_api=PUERTO_API, puerto_supabase=PUERTO_SUPABASE, llm_real=args.llm_real
+    ) as stack:
         datos = sembrar(stack)
         with open(args.salida, "w") as f:
             json.dump(datos, f, indent=2)
