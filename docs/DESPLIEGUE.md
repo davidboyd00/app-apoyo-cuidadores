@@ -5,7 +5,8 @@ hacer desde el código. En orden. Cada paso dice cómo verificarlo.
 
 > **Importante:** Render despliega `main` automáticamente (`render.yaml`,
 > `autoDeploy: true`). La API de noviembre necesita el paso 1, que **ya está
-> aplicado (23/11)**. Los pasos 2 a 4 requieren acceso a Render y GitHub.
+> aplicado (23/11)**. El paso 2 y la web (paso 5) también quedaron listos el
+> 23/11; los pasos 3 y 4 requieren acceso a GitHub.
 
 ## 1. Base de datos (Supabase) · ✅ hecho el 23/11/2026
 
@@ -40,6 +41,12 @@ de cuidado (21/11). Probado contra una copia del schema de producción:
 
 ## 2. API (Render) · variables de entorno
 
+**✅ Hecho el 23/11/2026.** Servicio `caregivers-backend` creado con el
+Blueprint (`render.yaml`, plan gratuito, Oregon):
+**https://caregivers-backend.onrender.com**. `CORS_ORIGINS` apunta a la web
+(paso 5). El plan gratuito se duerme tras 15 minutos sin uso: la primera
+petición después tarda cerca de un minuto (abrirla antes de una demo).
+
 En el servicio `caregivers-backend` → **Environment**. `render.yaml` ya trae
 los valores, pero si el servicio no se creó como Blueprint hay que ponerlos a
 mano:
@@ -71,6 +78,12 @@ válidas: 1 o más". Si Google retiró el modelo, probar otro nombre en el
 campo `modelo` y luego cambiar `GEMINI_MODEL` en Render.
 
 ## 5. Web
+
+**✅ Hecho el 23/11/2026.** Sitio estático `caregivers-web` creado con el
+`render.yaml` del repo web: **https://caregivers-web-wxm3.onrender.com**.
+Render le agregó `-wxm3` porque `caregivers-web.onrender.com` es de otra
+cuenta: no usar esa dirección. Esa URL va en `CORS_ORIGINS` de la API y en
+Supabase → Authentication → URL Configuration → Site URL.
 
 Variables del hosting de la web (`.env.example` del repo web):
 `VITE_API_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`,
