@@ -20,6 +20,11 @@ RAIZ = Path(__file__).resolve().parent.parent
 MIGRACIONES = RAIZ / "db" / "migrations"
 DESTINO = RAIZ / "db" / "APLICAR_EN_SUPABASE.sql"
 
+# Semillas que la base necesita y que no son schema (idempotentes). El usuario
+# anónimo recibe la autoría de los registros cuando alguien elimina su cuenta:
+# sin él, eliminar una cuenta con registros falla por la llave foránea.
+SEMILLAS = ["seed_placeholder.sql"]
+
 # En orden de aplicación.
 PENDIENTES = [
     "20261103_historial_inmutable_offline.sql",
@@ -35,6 +40,7 @@ ENCABEZADO = """-- =============================================================
 --
 -- Incluye, en orden:
 {lista}
+--   + semilla: usuario anónimo (db/seed_placeholder.sql)
 --
 -- Cómo aplicarlo (2 minutos):
 --   1. Supabase → SQL Editor → New query.
@@ -76,7 +82,10 @@ select item, ok from (values
        and column_name = 'contexto_entry_ids')),
   ('turnos con RLS (care_shifts)', coalesce((
      select relrowsecurity from pg_class where oid = to_regclass('public.care_shifts')), false)),
-  ('helper puede_estar_de_turno', to_regprocedure('public.puede_estar_de_turno(uuid,uuid)') is not null)
+  ('helper puede_estar_de_turno', to_regprocedure('public.puede_estar_de_turno(uuid,uuid)') is not null),
+  ('usuario anónimo para eliminar cuentas', exists (
+     select 1 from auth.users where id = '00000000-0000-0000-0000-000000000000'
+       and aud = 'authenticated' and confirmation_token is not null))
 ) as verificacion(item, ok);
 """
 
@@ -87,6 +96,9 @@ def armar() -> str:
     for i, nombre in enumerate(PENDIENTES, 1):
         cuerpo = (MIGRACIONES / nombre).read_text().strip()
         partes.append(f"\n-- >>>>>>>>>> {i}/{len(PENDIENTES)} · {nombre}\n\n{cuerpo}\n")
+    for nombre in SEMILLAS:
+        cuerpo = (RAIZ / "db" / nombre).read_text().strip()
+        partes.append(f"\n-- >>>>>>>>>> semilla · db/{nombre}\n\n{cuerpo}\n")
     partes.append(VERIFICACION)
     return "".join(partes)
 

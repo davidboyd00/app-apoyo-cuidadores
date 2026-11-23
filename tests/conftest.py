@@ -54,8 +54,8 @@ def base_dsn() -> str:
     with _connect(TEST_DB) as conn, conn.cursor() as cur:
         cur.execute(AUTH_MOCK_SQL)
         cur.execute(SCHEMA_SQL)
-        # Placeholder de "usuario eliminado" — en Supabase real se crea a
-        # mano con el INSERT expandido de docs/SUPABASE.md.
+        # Placeholder de "usuario eliminado": el mismo INSERT que va en
+        # db/APLICAR_EN_SUPABASE.sql para producción.
         cur.execute(SEED_PLACEHOLDER_SQL)
     yield TEST_DB
     with _connect("postgres") as conn, conn.cursor() as cur:

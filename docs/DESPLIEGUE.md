@@ -4,11 +4,26 @@ Pasos que requieren acceso a Supabase, Render o GitHub y que no se pueden
 hacer desde el código. En orden. Cada paso dice cómo verificarlo.
 
 > **Importante:** Render despliega `main` automáticamente (`render.yaml`,
-> `autoDeploy: true`). Desde que `main` tiene la API de noviembre, la
-> bitácora, el asistente y los resúmenes **fallan en producción hasta
-> aplicar el paso 1**. Hacerlo primero.
+> `autoDeploy: true`). La API de noviembre necesita el paso 1, que **ya está
+> aplicado (23/11)**. Los pasos 2 a 4 requieren acceso a Render y GitHub.
 
-## 1. Base de datos (Supabase) · 2 minutos
+## 1. Base de datos (Supabase) · ✅ hecho el 23/11/2026
+
+Aplicado después de un ensayo revertido: verificación 11/11 y catálogo de
+producción idéntico a `db/schema.sql`. Incluye la semilla del usuario
+anónimo, que faltaba (sin ella, eliminar una cuenta con registros fallaba).
+
+Chequeos de seguridad y rendimiento de Supabase (panel → Advisors), 23/11:
+
+- **Seguridad, sin hallazgos críticos.** Avisos aceptados:
+  - Las funciones SECURITY DEFINER se pueden llamar con la clave pública
+    (`anon`). Sin sesión no hacen nada, porque validan `auth.uid()`.
+    Endurecimiento sugerido: `revoke execute ... from anon`.
+  - "Leaked password protection" requiere plan Pro.
+- **Rendimiento:** índices sin uso, llaves foráneas sin índice y
+  `auth.uid()` por fila en las policies. Con el volumen del piloto no importa.
+
+Los pasos de abajo quedan para un proyecto nuevo.
 
 1. Supabase → **SQL Editor** → **New query**.
 2. Pegar **completo** `db/APLICAR_EN_SUPABASE.sql` → **Run**.
@@ -90,6 +105,9 @@ Ver `docs/REGISTRO_TRATAMIENTO.md` § Encargados.
   variable `GEMINI_MODEL`.
 - **Asistente o resúmenes en 503 / "error":** casi siempre es la clave o el
   modelo. Paso 4.
+- **Nada responde y Supabase dice "Paused":** el plan gratuito pausa el
+  proyecto tras una semana sin actividad. En el panel, *Restore project*
+  (tarda unos minutos, no se pierden datos). Revisarlo antes de cada demo.
 
 ---
 

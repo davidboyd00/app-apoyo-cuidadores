@@ -546,10 +546,9 @@ grant select on centers to anon;
 -- author_id se reasigna a este usuario para preservar el registro histórico
 -- sin poder trazar de vuelta al ex-cuidador.
 --
--- El INSERT de esta fila NO va acá porque `auth.users` en Supabase real
--- tiene columnas obligatorias que este schema no puede rellenar de forma
--- portable. Se crea con `db/seed_placeholder.sql` (local) o con el paso
--- documentado en `docs/SUPABASE.md` (producción).
+-- El INSERT de esta fila NO va acá: `auth.users` es de Supabase Auth, no de
+-- este schema. Se crea con `db/seed_placeholder.sql`, el mismo archivo en
+-- local y en Supabase (va incluido en `db/APLICAR_EN_SUPABASE.sql`).
 
 -- RPC: DELETE /me. Corre como SECURITY DEFINER para poder tocar auth.users
 -- y reasignar author_id (que el user no puede modificar directamente por RLS).
