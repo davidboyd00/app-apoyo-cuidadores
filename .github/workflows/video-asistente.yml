@@ -1,0 +1,144 @@
+name: Video del asistente (IA real)
+
+# Graba en video, en formato celular, la web + la API con una familia
+# FICTICIA y el Gemini real (secret GEMINI_API_KEY): bitácora, dos preguntas
+# al asistente y un resumen médico. Prueba la IA de punta a punta y sirve
+# para el video demo (EDT 5.3.2). Nunca usa datos reales: la base es local
+# del runner y se borra al terminar.
+#
+# Se lanza en Actions → "Video del asistente (IA real)" → Run workflow, o con
+# un push a la rama `video-asistente`. El MP4 y resultado.json quedan como
+# artefacto y en la rama `videos` (solo el último).
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [video-asistente]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: video-asistente
+  cancel-in-progress: true
+
+jobs:
+  grabar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      # La demo importa la configuración de la API; el stack local pone los
+      # valores reales al levantarse.
+      SUPABASE_URL: http://127.0.0.1:54321
+      SUPABASE_ANON_KEY: demo
+      POSTGREST_BIN: /usr/local/bin/postgrest
+      LLM_PROVIDER: gemini
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - name: Verificar la clave de Gemini
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error::Falta el secret GEMINI_API_KEY (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: davidboyd00/app-apoyo-cuidadores-web
+          path: web
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements-dev.txt playwright
+          python -m playwright install --with-deps chromium
+          curl -sSL https://github.com/PostgREST/postgrest/releases/download/v12.2.3/postgrest-v12.2.3-linux-static-x64.tar.xz \
+            | sudo tar -xJ -C /usr/local/bin
+          sudo apt-get install -y -qq ffmpeg > /dev/null
+          npm ci --prefix web
+
+      - name: Levantar la demo (datos ficticios + Gemini real)
+        run: |
+          nohup python -m tests.integracion.demo --llm-real --salida /tmp/demo.json > /tmp/demo.log 2>&1 &
+          for i in $(seq 1 120); do test -s /tmp/demo.json && break; sleep 1; done
+          test -s /tmp/demo.json || { cat /tmp/demo.log; exit 1; }
+          tail -1 /tmp/demo.log
+
+      - name: Compilar y servir la web
+        working-directory: web
+        run: |
+          export VITE_API_URL=http://127.0.0.1:8001 VITE_SUPABASE_URL=http://127.0.0.1:54321
+          export VITE_POLICY_VERSION=2026-09-11
+          export VITE_SUPABASE_ANON_KEY=$(python -c "import json; print(json.load(open('/tmp/demo.json'))['anon_key'])")
+          npm run build
+          nohup npx vite preview --port 4173 --host 127.0.0.1 > /tmp/web.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:4173 > /dev/null && break; sleep 1; done
+
+      - name: Grabar
+        run: python scripts/video_asistente.py --demo /tmp/demo.json --web http://127.0.0.1:4173 --salida video
+
+      - name: Convertir a MP4
+        if: always()
+        run: |
+          if [ -f video/asistente.webm ]; then
+            ffmpeg -v error -y -i video/asistente.webm -c:v libx264 -preset veryfast -crf 23 \
+              -pix_fmt yuv420p -movflags +faststart video/asistente.mp4
+          fi
+          # Solo nombres de excepciones (la API no loguea contenido clínico).
+          cp /tmp/integracion-*/api.log video/api.log 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: video-asistente
+          path: |
+            video/asistente.mp4
+            video/resultado.json
+            video/api.log
+          if-no-files-found: warn
+
+      - name: Publicar en la rama videos
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/pub
+          cp video/asistente.mp4 video/resultado.json video/api.log /tmp/pub/ 2>/dev/null || true
+          # Nunca publicar la clave (el repo es público).
+          if grep -rqF "$GEMINI_API_KEY" /tmp/pub; then
+            echo "::error::Un archivo contiene la clave; no se publica."
+            exit 1
+          fi
+          cd /tmp/pub
+          echo "Run ${GITHUB_RUN_ID} · commit ${GITHUB_SHA}" > LEEME.txt
+          git init -q -b videos
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Video del asistente (run ${GITHUB_RUN_ID})"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:videos

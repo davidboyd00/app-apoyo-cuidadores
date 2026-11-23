@@ -85,9 +85,18 @@ def _esperar(url: str, procesos: list, logs: list[Path], intentos: int = 100) ->
 
 
 @contextmanager
-def levantar_stack(binario: str, puerto_api: int | None = None, puerto_supabase: int | None = None):
+def levantar_stack(
+    binario: str,
+    puerto_api: int | None = None,
+    puerto_supabase: int | None = None,
+    llm_real: bool = False,
+):
     """Levanta Postgres (base nueva) + PostgREST + proxy + API. Al salir, apaga
-    todo y borra la base."""
+    todo y borra la base.
+
+    Con `llm_real` la API usa el proveedor configurado en el entorno
+    (`LLM_PROVIDER`, `GEMINI_API_KEY`…) en vez del LLM simulado. Solo con datos
+    ficticios: lo registrado viaja al proveedor."""
     with _connect("postgres") as conn, conn.cursor() as cur:
         cur.execute(f"drop database if exists {DB} with (force)")
         cur.execute(f"create database {DB}")
@@ -119,14 +128,15 @@ def levantar_stack(binario: str, puerto_api: int | None = None, puerto_supabase:
         "SUPABASE_URL": f"http://127.0.0.1:{p_proxy}",
         "SUPABASE_ANON_KEY": anon_key,
         "SUPABASE_JWT_SECRET": SECRETO,
-        "LLM_PROVIDER": "falso",
+        "LLM_PROVIDER": os.environ.get("LLM_PROVIDER", "gemini") if llm_real else "falso",
         "PYTHONPATH": str(RAIZ),
     }
     uvicorn = [sys.executable, "-m", "uvicorn", "--host", "127.0.0.1", "--log-level", "warning"]
+    app_api = "app.main:app" if llm_real else "tests.integracion.app_llm_falso:app"
     comandos = [
         ([binario, str(conf)], tmp / "postgrest.log"),
         ([*uvicorn, "--port", str(p_proxy), "tests.integracion.proxy:app"], tmp / "proxy.log"),
-        ([*uvicorn, "--port", str(p_api), "tests.integracion.app_llm_falso:app"], tmp / "api.log"),
+        ([*uvicorn, "--port", str(p_api), app_api], tmp / "api.log"),
     ]
     procesos, logs = [], []
     try:
