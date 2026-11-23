@@ -47,6 +47,16 @@ Blueprint (`render.yaml`, plan gratuito, Oregon):
 (paso 5). El plan gratuito se duerme tras 15 minutos sin uso: la primera
 petición después tarda cerca de un minuto (abrirla antes de una demo).
 
+**Despliegue de cada cambio:** hoy Render **no** despliega solo al hacer push
+(los Blueprints se crearon desde la URL pública del repo, sin la app de GitHub
+de Render). Para que lo haga: Render → Account Settings → GitHub → dar acceso a
+`app-apoyo-cuidadores` y `app-apoyo-cuidadores-web`. Mientras tanto, cada
+cambio se despliega a mano (servicio → **Manual Deploy**).
+
+El resumen médico usa su propio límite de tokens (`LLM_MAX_TOKENS_RESUMEN`,
+4096 por defecto; el asistente usa `LLM_MAX_TOKENS`). Si el modelo corta por
+el límite, el resumen queda en "error" (nunca se guarda un texto a medias).
+
 En el servicio `caregivers-backend` → **Environment**. `render.yaml` ya trae
 los valores, pero si el servicio no se creó como Blueprint hay que ponerlos a
 mano:
@@ -71,6 +81,16 @@ Settings → Secrets and variables → Actions:
   retención y resumen diario).
 
 ## 4. Verificar el modelo de IA (sirve desde el celular)
+
+**Prueba completa con video:** Actions → **Video del asistente (IA real)** →
+Run workflow. Levanta la app con una familia ficticia y el Gemini real, graba
+en formato celular dos preguntas al asistente y un resumen, y deja el video y
+`resultado.json` como artefacto (y en la rama `videos`). Tarda ~4 minutos.
+Primera corrida (23/11): respuestas con citas válidas, "la bitácora no
+alcanza" cuando corresponde y resumen completo; latencia de 2 a 37 s según la
+carga de la capa gratuita.
+
+**Prueba rápida:**
 
 GitHub → **Actions** → **Probar LLM** → **Run workflow**. Usa datos
 ficticios. Debe terminar en verde con "RESULTADO: OK", latencia y "citas
