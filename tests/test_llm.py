@@ -182,6 +182,34 @@ async def test_gemini_sin_clave_falla_claro(gemini, monkeypatch):
         await llm.ask_llm("ctx", "p")
 
 
+@pytest.mark.anyio
+async def test_gemini_texto_cortado_por_limite_es_error(gemini):
+    """Con texto parcial y MAX_TOKENS, no se devuelve el pedazo como si fuera todo."""
+    gemini.respuesta = SimpleNamespace(
+        text="Síntomas y signos: Mareo leve el 18/",
+        candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="MAX_TOKENS"))],
+        prompt_feedback=None,
+    )
+    with pytest.raises(llm.LLMError, match="límite de tokens"):
+        await llm.ask_llm("ctx", "p")
+
+
+@pytest.mark.anyio
+async def test_gemini_respeta_limite_por_llamada(gemini):
+    await llm.ask_llm("ctx", "p", max_tokens=4096)
+    assert gemini.ultima["config"].max_output_tokens == 4096
+
+
+@pytest.mark.anyio
+async def test_gemini_termino_normal_devuelve_texto(gemini):
+    gemini.respuesta = SimpleNamespace(
+        text="completo",
+        candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+        prompt_feedback=None,
+    )
+    assert await llm.ask_llm("ctx", "p") == "completo"
+
+
 # --- ClaudeProvider ---
 
 
@@ -215,3 +243,28 @@ async def test_claude_estructurado_pide_json_y_une_bloques(monkeypatch):
     assert _ClaudeFalso.ultima["model"] == settings.claude_model
     assert _ClaudeFalso.ultima["temperature"] == 0.0
     assert "JSON" in _ClaudeFalso.ultima["system"]
+
+
+@pytest.mark.anyio
+async def test_claude_texto_cortado_por_limite_es_error(monkeypatch):
+    import anthropic
+
+    class _ClaudeCortado:
+        ultima: dict = {}
+
+        def __init__(self, api_key=None):
+            async def create(**kwargs):
+                _ClaudeCortado.ultima = kwargs
+                return SimpleNamespace(
+                    content=[SimpleNamespace(type="text", text="Síntomas: Mareo leve el 18/")],
+                    stop_reason="max_tokens",
+                )
+
+            self.messages = SimpleNamespace(create=create)
+
+    monkeypatch.setattr(anthropic, "AsyncAnthropic", _ClaudeCortado)
+    monkeypatch.setattr(settings, "llm_provider", "claude")
+    monkeypatch.setattr(settings, "anthropic_api_key", "clave-test")
+    with pytest.raises(llm.LLMError, match="límite de tokens"):
+        await llm.ask_llm("ctx", "p", max_tokens=4096)
+    assert _ClaudeCortado.ultima["max_tokens"] == 4096
