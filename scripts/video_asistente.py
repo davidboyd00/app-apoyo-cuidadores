@@ -82,28 +82,39 @@ def _desplazar(page: Page, total: int, pasos: int = 6) -> None:
         _pausa(page, 0.35)
 
 
-def preguntar(page: Page, pregunta: str) -> dict:
+def preguntar(page: Page, pregunta: str, intentos: int = 2) -> dict:
+    """Escribe la pregunta y espera la respuesta (o el aviso de error). La capa
+    gratuita de la IA a veces tarda o responde 5xx: reintenta una vez."""
     caja = page.get_by_label("Tu pregunta")
     caja.click()
+    caja.fill("")
     caja.press_sequentially(pregunta, delay=45)
     _pausa(page, 0.6)
-    inicio = time.monotonic()
-    page.get_by_role("button", name="Preguntar", exact=True).click()
     tarjeta = page.locator("article").filter(has_text=pregunta).first
     alerta = page.get_by_role("form", name="Preguntar al asistente").get_by_role("alert")
-    expect(tarjeta.or_(alerta)).to_be_visible(timeout=90_000)
-    segundos = round(time.monotonic() - inicio, 1)
-    if alerta.is_visible():
-        return {"pregunta": pregunta, "error": alerta.inner_text(), "segundos": segundos}
-    tarjeta.scroll_into_view_if_needed()
-    return {
-        "pregunta": pregunta,
-        "respuesta": tarjeta.locator("p").nth(2).inner_text(),
-        "muestra_registros": tarjeta.get_by_role("button", name="Ocultar registros").count() > 0,
-        "dice_que_no_alcanza": tarjeta.get_by_text("La bitácora no alcanza para responder").count()
-        > 0,
-        "segundos": segundos,
-    }
+    resultado: dict = {"pregunta": pregunta, "intentos": 0}
+    for intento in range(1, intentos + 1):
+        resultado["intentos"] = intento
+        inicio = time.monotonic()
+        page.get_by_role("button", name="Preguntar", exact=True).click()
+        expect(tarjeta.or_(alerta)).to_be_visible(timeout=180_000)
+        resultado["segundos"] = round(time.monotonic() - inicio, 1)
+        if tarjeta.is_visible():
+            tarjeta.scroll_into_view_if_needed()
+            resultado.update(
+                respuesta=tarjeta.locator("p").nth(2).inner_text(),
+                muestra_registros=tarjeta.get_by_role("button", name="Ocultar registros").count()
+                > 0,
+                dice_que_no_alcanza=tarjeta.get_by_text(
+                    "La bitácora no alcanza para responder"
+                ).count()
+                > 0,
+            )
+            resultado.pop("error", None)
+            return resultado
+        resultado["error"] = alerta.inner_text()
+        _pausa(page, 4)
+    return resultado
 
 
 def trazabilidad(demo: dict) -> list[dict]:
@@ -140,8 +151,9 @@ def grabar(demo: dict, web: str, salida: Path) -> dict:
             locale="es-CL",
             timezone_id="America/Santiago",
             record_video_dir=str(salida),
-            # Al doble de la resolución lógica: el texto se lee nítido en el celular.
-            record_video_size={"width": ANCHO * 2, "height": ALTO * 2},
+            # Igual al viewport (Playwright no escala el video con device_scale_factor;
+            # para verlo más grande se escala después con ffmpeg).
+            record_video_size={"width": ANCHO, "height": ALTO},
         )
         ctx.add_init_script(
             f"localStorage.setItem({json.dumps(CLAVE_SESION)}, {json.dumps(_sesion(demo['personas']['ana']))});"
@@ -161,7 +173,10 @@ def grabar(demo: dict, web: str, salida: Path) -> dict:
             expect(page.get_by_label("Tu pregunta")).to_be_visible(timeout=30_000)
             _pausa(page, 1.5)
             for pregunta in PREGUNTAS:
-                r = preguntar(page, pregunta)
+                try:
+                    r = preguntar(page, pregunta)
+                except AssertionError as exc:
+                    r = {"pregunta": pregunta, "error": f"sin respuesta: {str(exc)[:200]}"}
                 resultado["preguntas"].append(r)
                 print(json.dumps(r, ensure_ascii=False), flush=True)
                 _pausa(page, 2)
@@ -180,7 +195,7 @@ def grabar(demo: dict, web: str, salida: Path) -> dict:
             inicio = time.monotonic()
             page.get_by_role("button", name="Generar resumen").click()
             expect(page.get_by_role("link", name="Ver e imprimir")).to_have_count(
-                antes + 1, timeout=120_000
+                antes + 1, timeout=180_000
             )
             segundos = round(time.monotonic() - inicio, 1)
             _pausa(page, 1.5)
