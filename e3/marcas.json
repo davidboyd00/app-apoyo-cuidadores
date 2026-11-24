@@ -1,0 +1,93 @@
+{
+  "navegador": "Google Chrome",
+  "recorte_inicial_s": 2.57,
+  "duracion_s": 347.0,
+  "marcas": [
+    {
+      "paso": 1,
+      "titulo": "Entrar y aceptar la política",
+      "guia": "0:00",
+      "real": "0:00",
+      "segundo": 0.0
+    },
+    {
+      "paso": 2,
+      "titulo": "Ficha de la persona cuidada",
+      "guia": "0:30",
+      "real": "0:30",
+      "segundo": 30.0
+    },
+    {
+      "paso": 3,
+      "titulo": "Bitácora y registro por voz",
+      "guia": "0:55",
+      "real": "0:55",
+      "segundo": 55.0
+    },
+    {
+      "paso": 4,
+      "titulo": "SC-02: historial inmutable",
+      "guia": "1:45",
+      "real": "1:45",
+      "segundo": 105.0
+    },
+    {
+      "paso": 5,
+      "titulo": "SC-01: registro sin conexión",
+      "guia": "2:30",
+      "real": "2:30",
+      "segundo": 150.0
+    },
+    {
+      "paso": 6,
+      "titulo": "Turnos",
+      "guia": "3:10",
+      "real": "3:10",
+      "segundo": 190.0
+    },
+    {
+      "paso": 7,
+      "titulo": "Medicamentos",
+      "guia": "3:35",
+      "real": "3:35",
+      "segundo": 215.0
+    },
+    {
+      "paso": 8,
+      "titulo": "Asistente de IA",
+      "guia": "3:55",
+      "real": "3:55",
+      "segundo": 235.0
+    },
+    {
+      "paso": 9,
+      "titulo": "Resumen médico en PDF",
+      "guia": "4:35",
+      "real": "4:35",
+      "segundo": 275.0
+    },
+    {
+      "paso": 10,
+      "titulo": "Red de cuidado",
+      "guia": "5:05",
+      "real": "5:05",
+      "segundo": 305.0
+    },
+    {
+      "paso": 11,
+      "titulo": "Centros y farmacias, y Mi perfil",
+      "guia": "5:25",
+      "real": "5:25",
+      "segundo": 325.0
+    },
+    {
+      "paso": "fin",
+      "real": "5:46"
+    }
+  ],
+  "notas": [
+    "El asistente respondió en 6.2 s.",
+    "La respuesta en vivo no citó registros."
+  ],
+  "error": null
+}
