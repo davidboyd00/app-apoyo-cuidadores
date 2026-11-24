@@ -1,0 +1,78 @@
+# Graba la demo del video final E3 en PRODUCCIÓN con Google Chrome, siguiendo
+# la guía paso a paso (scripts/grabar_demo_e3.py). Solo datos y cuentas
+# ficticias (familia de Elba Rojas, @cuidadores.test).
+#
+# Contraseñas de un solo uso: se generan aquí y nunca salen del runner. Se
+# publica solo su hash bcrypt en la rama `grabacion-claves`; alguien del equipo
+# lo activa en Supabase y el job sigue solo. Al final la rama se borra y las
+# contraseñas se desactivan en Supabase.
+name: Grabar demo E3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [grabar-demo]
+
+permissions:
+  contents: write
+
+concurrency: grabar-demo-e3
+
+jobs:
+  grabar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Instalar
+        run: |
+          pip install playwright httpx bcrypt imageio-ffmpeg
+          python -m playwright install chromium
+      - name: Contraseñas de un solo uso (solo el hash sale del runner)
+        run: python scripts/grabar_demo_e3.py claves --claves /tmp/claves --publicar /tmp/publicar/hashes.json
+      - name: Publicar los hashes para activarlos
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd /tmp/publicar
+          echo "${GITHUB_RUN_ID}" > run.txt
+          git init -q -b grabacion-claves
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -qm "Hashes para la grabación (run ${GITHUB_RUN_ID})"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:grabacion-claves
+      - name: Esperar la activación
+        run: python scripts/grabar_demo_e3.py esperar --claves /tmp/claves
+      - name: Preparar (resumen y pregunta del día antes)
+        run: python scripts/grabar_demo_e3.py preparar --claves /tmp/claves
+      - name: Grabar
+        run: python scripts/grabar_demo_e3.py grabar --claves /tmp/claves --salida video
+      - name: MP4 1920x1080
+        if: always()
+        run: test -f video/toma.webm && python scripts/grabar_demo_e3.py mp4 --salida video || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: demo-e3
+          path: |
+            video/3_David_demo.mp4
+            video/marcas.json
+            video/paso_*.jpg
+          if-no-files-found: ignore
+      - name: Publicar en la rama videos (e3/)
+        if: always()
+        run: |
+          test -f video/marcas.json || exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch -q origin videos:videos && git worktree add -q /tmp/videos videos
+          mkdir -p /tmp/videos/e3
+          cp video/marcas.json /tmp/videos/e3/
+          cp video/3_David_demo.mp4 video/paso_*.jpg /tmp/videos/e3/ 2>/dev/null || true
+          cd /tmp/videos && git add e3 && git commit -qm "Demo E3 (run ${GITHUB_RUN_ID})" && git push -q origin HEAD:videos
+      - name: Borrar la rama de hashes
+        if: always()
+        run: git push -q origin --delete grabacion-claves || true
