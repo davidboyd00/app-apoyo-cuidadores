@@ -1,0 +1,56 @@
+# Scraper de centros de salud y farmacias (datos públicos, sin datos personales).
+#
+# Descarga los establecimientos de salud del DEIS (datos.gob.cl) y las farmacias
+# de OpenStreetMap (y Farmanet del MINSAL, si acepta la descarga).
+# Normaliza a la tabla `centers` y:
+#   - si existen los secrets SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY, la carga;
+#   - siempre publica crudos/ y salida/ (con centros.sql) en la rama datos-centros.
+name: Centros y farmacias (datos públicos)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [centros-publicos]
+  schedule:
+    # Lunes 06:17 (Chile, aprox.): farmacias de turno y cambios de la semana.
+    - cron: "17 9 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  centros:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Instalar
+        run: pip install httpx==0.27.2
+      - name: Descargar fuentes públicas
+        run: python scripts/centros_publicos.py descargar --crudos crudos
+      - name: Normalizar
+        run: python scripts/centros_publicos.py normalizar --crudos crudos --salida salida
+      - name: Cargar en Supabase
+        if: env.SUPABASE_URL != '' && env.SUPABASE_SERVICE_ROLE_KEY != ''
+        run: python scripts/centros_publicos.py cargar --salida salida
+      - name: Publicar en la rama datos-centros
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/pub
+          cp -r crudos salida /tmp/pub/ 2>/dev/null || true
+          cd /tmp/pub
+          echo "Run ${GITHUB_RUN_ID} · commit ${GITHUB_SHA} · $(date -u +%FT%TZ)" > LEEME.txt
+          git init -q -b datos-centros
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Datos públicos de centros y farmacias (run ${GITHUB_RUN_ID})"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:datos-centros

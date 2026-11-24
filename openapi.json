@@ -2739,6 +2739,25 @@
             }
           },
           {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Busca en nombre, comuna y dirección.",
+              "title": "Q"
+            },
+            "description": "Busca en nombre, comuna y dirección."
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,

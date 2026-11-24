@@ -173,14 +173,14 @@ def sembrar(stack) -> dict:
                 break
             time.sleep(0.1)
 
-    # Centros de ejemplo (en producción los cargan los scrapers con service role).
+    # Centros de ejemplo (en producción los carga scripts/centros_publicos.py).
     with _connect(stack.db) as conn, conn.cursor() as cur:
         cur.executemany(
             "insert into centers (nombre, tipo, region, comuna, direccion, telefono) values (%s, %s, %s, %s, %s, %s)",
             [
                 (
                     "CESFAM Ejemplo Norte",
-                    "Centro de salud",
+                    "CESFAM",
                     "Metropolitana",
                     "Providencia",
                     "Av. Ejemplo 123",
