@@ -312,7 +312,7 @@ def test_centros_busqueda_por_region_tipo_y_comuna(familia):
     servidor, y el texto encuentra la comuna aunque se escriba sin tildes."""
     from tests.conftest import _connect
 
-    stack = familia["stack"]
+    stack, h = familia["stack"], familia["ana"].headers
     with _connect(stack.db) as conn, conn.cursor() as cur:
         cur.executemany(
             "insert into centers (nombre, tipo, region, comuna, direccion, telefono) "
@@ -338,17 +338,17 @@ def test_centros_busqueda_por_region_tipo_y_comuna(familia):
             ],
         )
     with stack.cliente() as c:
-        r = c.get("/centers", params={"region": "Biobío", "q": "concepcion"})
+        r = c.get("/centers", params={"region": "Biobío", "q": "concepcion"}, headers=h)
         assert r.status_code == 200, r.text
         assert {x["nombre"] for x in r.json()} == {
             "Farmacia Prueba Centro",
             "Farmacia Prueba Turno",
         }
-        r = c.get("/centers", params={"region": "Biobío", "tipo": "Farmacia de turno"})
+        r = c.get("/centers", params={"region": "Biobío", "tipo": "Farmacia de turno"}, headers=h)
         assert [x["nombre"] for x in r.json()] == ["Farmacia Prueba Turno"]
-        r = c.get("/centers", params={"q": "ñuñoa"})
+        r = c.get("/centers", params={"q": "ñuñoa"}, headers=h)
         assert [x["nombre"] for x in r.json()] == ["CESFAM Prueba Ñuñoa"]
         # Signos que romperían el filtro de PostgREST se ignoran.
-        r = c.get("/centers", params={"q": "barros arana, (1)"})
+        r = c.get("/centers", params={"q": "barros arana, (1)"}, headers=h)
         assert r.status_code == 200
         assert [x["nombre"] for x in r.json()] == ["Farmacia Prueba Centro"]
