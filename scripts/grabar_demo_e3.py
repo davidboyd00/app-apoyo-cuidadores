@@ -597,7 +597,11 @@ def paso_7(t: Toma, page, ctx, contrasena: str, expect) -> None:
     proximas = page.get_by_role("heading", name=re.compile("Próximas dosis"))
     t.mover(proximas, 1.0)
     primera = page.get_by_role("group", name=re.compile("^Registrar dosis de")).first
-    t.clic(primera.get_by_role("button", name="Tomada"), 1.2)
+    nombre_dosis = (primera.get_attribute("aria-label") or "").replace("Registrar dosis de ", "")
+    t.clic(primera.get_by_role("button", name="Tomada"), 0.3)
+    expect(page.get_by_text(re.compile(r"^Tomada · Tú")).first).to_be_visible(timeout=20_000)
+    t.mover(page.get_by_text(re.compile(r"^Tomada · Tú")).first, 1.2)
+    t.notas.append(f"Dosis marcada en vivo: {nombre_dosis}.")
     siguiente = page.get_by_role("group", name=re.compile("^Registrar dosis de")).first
     t.mover(siguiente.get_by_role("button", name="Más tarde"), 1.8)
     t.mover(page.get_by_role("heading", name="Adherencia · últimos 7 días"), 2.5)
@@ -626,12 +630,15 @@ def paso_8(t: Toma, page, ctx, contrasena: str, expect) -> None:
     t.notas.append(f"El asistente respondió en {round(time.monotonic() - inicio, 1)} s.")
     respuesta = tarjetas.first
     t.mover(respuesta, 1.5)
-    basado = respuesta.get_by_role("button", name=re.compile(r"^Basado en"))
-    if basado.count():
-        t.clic(basado, 1.0)
+    citas = respuesta.get_by_role("button", name=re.compile(r"^(Basado en|Ocultar registros)"))
+    if citas.count():
+        if citas.inner_text().startswith("Basado en"):
+            t.clic(citas, 1.0)
         t.mover(respuesta, 4.0)
+        t.notas.append("La respuesta en vivo cita registros.")
     else:
         t.notas.append("La respuesta en vivo no citó registros.")
+    t.notas.append("Respuesta en vivo: " + respuesta.inner_text()[:600].replace("\n", " "))
 
 
 def paso_9(t: Toma, page, ctx, contrasena: str, expect) -> None:

@@ -22,6 +22,11 @@ jobs:
   grabar:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # Toma 2: familia y cuenta nuevas (la cuenta de la toma 1 ya aceptó la política).
+      PACIENTE: de3a0000-0000-4000-8000-0000000000e3
+      CUENTA_TOMA: valentina.rojas@cuidadores.test
+      MIEMBROS: Valentina Rojas,Carmen Rojas,Pedro Rojas,Jorge Rojas
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
