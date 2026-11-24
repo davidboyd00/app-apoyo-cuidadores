@@ -169,8 +169,9 @@ def preparar(directorio: Path) -> None:
     if not token:
         raise SystemExit("Carmen no pudo iniciar sesión.")
     with _api(token) as c:
-        version = c.get("/me/consent").json()["version_vigente"]
-        c.post("/me/consent", json={"version": version}).raise_for_status()
+        estado = c.get("/me/consent").json()
+        if not estado.get("aceptada_en"):  # en una segunda toma Carmen ya aceptó
+            c.post("/me/consent", json={"version": estado["version_vigente"]}).raise_for_status()
 
         # Una dosis para marcar "Tomada" en vivo: ~15 min después de ahora.
         ahora = datetime.now(TZ) + timedelta(minutes=15)
