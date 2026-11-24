@@ -8,6 +8,7 @@ from supabase import Client
 from ..audit import registrar
 from ..deps import get_current_user, get_db
 from ..llm import RespuestaAsistente, ask_llm_citado
+from ..resumen import fecha_local
 from ..schemas import (
     AssistantAnswer,
     AssistantMessage,
@@ -38,7 +39,7 @@ def _sin_registros(ventana_dias: int) -> RespuestaAsistente:
 def _armar_contexto(entradas: list[dict]) -> str:
     lineas = []
     for e in entradas:
-        lineas.append(f"[{e['id']}] {e['occurred_at']} · {e['kind']}: {e['content']}")
+        lineas.append(f"[{e['id']}] {fecha_local(e['occurred_at'])} · {e['kind']}: {e['content']}")
     return "\n".join(lineas) if lineas else "(sin entradas en la ventana solicitada)"
 
 
