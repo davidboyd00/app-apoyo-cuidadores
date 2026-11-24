@@ -80,6 +80,12 @@ def _fecha(valor: str | datetime) -> str:
     return dt.astimezone(_ZONA).strftime("%d-%m-%Y %H:%M")
 
 
+# La base guarda en UTC: al LLM se le pasa la hora de Chile, la que vivió la
+# familia. Si recibe UTC, informa como del día siguiente lo ocurrido después
+# de las 21:00 (encontrado en la grabación de la demo E3).
+fecha_local = _fecha
+
+
 def _armar_contexto(
     entradas: list[dict], max_entradas: int, max_caracteres: int
 ) -> tuple[str, int]:
@@ -91,7 +97,7 @@ def _armar_contexto(
     usados = 0
     for e in entradas[:max_entradas]:
         marca = " [corregida]" if e.get("editada") else ""
-        linea = f"{e['occurred_at']} · {e['kind']}{marca}: {e['content']}"
+        linea = f"{fecha_local(e['occurred_at'])} · {e['kind']}{marca}: {e['content']}"
         if usados + len(linea) + 1 > max_caracteres:
             break
         lineas.append(linea)
