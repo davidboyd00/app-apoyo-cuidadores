@@ -305,3 +305,50 @@ def test_exportacion_arco_y_eliminacion_de_cuenta(familia):
     assert beto.id not in autores
     assert "00000000-0000-0000-0000-000000000000" in autores
     assert turnos == []
+
+
+def test_centros_busqueda_por_region_tipo_y_comuna(familia):
+    """Centros es público y son miles: región, tipo y texto se filtran en el
+    servidor, y el texto encuentra la comuna aunque se escriba sin tildes."""
+    from tests.conftest import _connect
+
+    stack = familia["stack"]
+    with _connect(stack.db) as conn, conn.cursor() as cur:
+        cur.executemany(
+            "insert into centers (nombre, tipo, region, comuna, direccion, telefono) "
+            "values (%s, %s, %s, %s, %s, %s)",
+            [
+                (
+                    "Farmacia Prueba Centro",
+                    "Farmacia",
+                    "Biobío",
+                    "Concepción",
+                    "Barros Arana 1",
+                    None,
+                ),
+                (
+                    "Farmacia Prueba Turno",
+                    "Farmacia de turno",
+                    "Biobío",
+                    "Concepción",
+                    None,
+                    "+56412345678",
+                ),
+                ("CESFAM Prueba Ñuñoa", "CESFAM", "Metropolitana", "Ñuñoa", "Irarrázaval 2", None),
+            ],
+        )
+    with stack.cliente() as c:
+        r = c.get("/centers", params={"region": "Biobío", "q": "concepcion"})
+        assert r.status_code == 200, r.text
+        assert {x["nombre"] for x in r.json()} == {
+            "Farmacia Prueba Centro",
+            "Farmacia Prueba Turno",
+        }
+        r = c.get("/centers", params={"region": "Biobío", "tipo": "Farmacia de turno"})
+        assert [x["nombre"] for x in r.json()] == ["Farmacia Prueba Turno"]
+        r = c.get("/centers", params={"q": "ñuñoa"})
+        assert [x["nombre"] for x in r.json()] == ["CESFAM Prueba Ñuñoa"]
+        # Signos que romperían el filtro de PostgREST se ignoran.
+        r = c.get("/centers", params={"q": "barros arana, (1)"})
+        assert r.status_code == 200
+        assert [x["nombre"] for x in r.json()] == ["Farmacia Prueba Centro"]
